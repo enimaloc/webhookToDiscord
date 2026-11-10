@@ -16,14 +16,19 @@ import fr.enimaloc.w2d.web.SessionTokens;
 import fr.enimaloc.w2d.web.WebhookController;
 import io.javalin.Javalin;
 import io.javalin.http.staticfiles.Location;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Clock;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public final class App {
+    private static final Logger LOG = LoggerFactory.getLogger(App.class);
+    private static final long RESUME_INTERVAL_SECONDS = 60;
 
     private App() {
     }
@@ -64,6 +69,16 @@ public final class App {
         }
     }
 
+    /** Never throws: a database error must not kill the caller (main thread or scheduler). */
+    static void resumePendingSafely(EndpointRepository endpoints, HistoryRepository history,
+                                    EntryProcessor processor) {
+        try {
+            resumePending(endpoints, history, processor);
+        } catch (RuntimeException e) {
+            LOG.error("Resuming pending requests failed", e);
+        }
+    }
+
     public static void main(String[] args) {
         AppConfig config = AppConfig.fromEnv(System.getenv());
         Database db = new Database(config);
@@ -82,10 +97,18 @@ public final class App {
         RetentionJob retention = new RetentionJob(history, config.retentionDays());
         retention.start();
 
+        // picks up requests whose trigger was lost (e.g. scheduling failure, pod killed before draining)
+        ScheduledExecutorService resumer = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "pending-resume");
+            t.setDaemon(true);
+            return t;
+        });
+
         Javalin app = create(config, endpoints, history, processor, pipeline);
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             app.stop();
             retention.stop();
+            resumer.shutdownNow();
             executor.shutdown();
             try {
                 long graceMs = config.scriptTimeout().toMillis() + 10_000;
@@ -100,6 +123,8 @@ public final class App {
             db.close();
         }));
         app.start(config.port());
-        resumePending(endpoints, history, processor);
+        resumePendingSafely(endpoints, history, processor);
+        resumer.scheduleWithFixedDelay(() -> resumePendingSafely(endpoints, history, processor),
+                RESUME_INTERVAL_SECONDS, RESUME_INTERVAL_SECONDS, TimeUnit.SECONDS);
     }
 }
