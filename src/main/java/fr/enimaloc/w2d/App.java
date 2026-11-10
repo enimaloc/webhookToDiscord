@@ -15,6 +15,7 @@ import fr.enimaloc.w2d.web.ApiController;
 import fr.enimaloc.w2d.web.SessionTokens;
 import fr.enimaloc.w2d.web.WebhookController;
 import io.javalin.Javalin;
+import io.javalin.http.staticfiles.Location;
 
 import java.time.Clock;
 import java.util.concurrent.ExecutorService;
@@ -50,6 +51,7 @@ public final class App {
             // public: /health, /webhook/*; guarded: /api/* except login and session
             auth.register(cfg.routes);
             api.register(cfg.routes);
+            cfg.staticFiles.add("/public", Location.CLASSPATH);
         });
     }
 
