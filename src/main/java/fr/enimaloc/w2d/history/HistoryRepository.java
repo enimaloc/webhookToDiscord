@@ -19,6 +19,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 public final class HistoryRepository {
     private static final String REQ_COLUMNS =
@@ -39,10 +40,11 @@ public final class HistoryRepository {
 
     public long insertPending(String endpointId, String method, Map<String, List<String>> headers, String query,
                               byte[] body, Set<String> maskedHeaders) {
+        Set<String> masks = maskedHeaders.stream().map(m -> m.toLowerCase(Locale.ROOT)).collect(Collectors.toSet());
         Map<String, List<String>> stored = new LinkedHashMap<>();
         headers.forEach((name, values) -> {
             String key = name.toLowerCase(Locale.ROOT);
-            boolean masked = key.equals("authorization") || maskedHeaders.contains(key);
+            boolean masked = key.equals("authorization") || masks.contains(key);
             stored.put(key, masked ? List.of("***") : List.copyOf(values));
         });
         return jdbi.withHandle(h -> h.createQuery(
@@ -55,10 +57,16 @@ public final class HistoryRepository {
 
     /** Claims the oldest pending request; runs on the given handle so it shares the caller's connection. */
     public Optional<IncomingRequest> claimNextPending(Handle h, String endpointId) {
-        return h.createQuery("UPDATE requests SET status = 'processing' WHERE id = ("
+        return h.createQuery("UPDATE requests SET status = 'processing' WHERE status = 'pending' AND id = ("
                         + "SELECT id FROM requests WHERE endpoint_id = :endpoint AND status = 'pending' "
-                        + "ORDER BY id LIMIT 1) RETURNING " + REQ_COLUMNS)
+                        + "ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING " + REQ_COLUMNS)
                 .bind("endpoint", endpointId).map(HistoryRepository::mapRequest).findOne();
+    }
+
+    public boolean hasPending(String endpointId) {
+        return jdbi.withHandle(h -> h.createQuery(
+                        "SELECT EXISTS (SELECT 1 FROM requests WHERE endpoint_id = :endpoint AND status = 'pending')")
+                .bind("endpoint", endpointId).mapTo(Boolean.class).one());
     }
 
     public void setStatus(long requestId, RequestStatus status) {
