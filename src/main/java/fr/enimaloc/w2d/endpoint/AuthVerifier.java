@@ -18,11 +18,12 @@ public final class AuthVerifier {
         try {
             return switch (auth) {
                 case AuthConfig.None n -> true;
-                case AuthConfig.SecretHeader s -> s.header() != null && s.value() != null
+                case AuthConfig.SecretHeader s -> s.header() != null && !s.header().isBlank() && s.value() != null && !s.value().isBlank()
                         && eq(header.apply(s.header()), s.value());
-                case AuthConfig.Bearer b -> b.token() != null
+                case AuthConfig.Bearer b -> b.token() != null && !b.token().isBlank()
                         && eq(header.apply("Authorization"), "Bearer " + b.token());
                 case AuthConfig.Basic b -> b.username() != null && b.password() != null
+                        && !(blank(b.username()) && blank(b.password()))
                         && eq(header.apply("Authorization"), "Basic " + Base64.getEncoder().encodeToString(
                                 (b.username() + ":" + b.password()).getBytes(StandardCharsets.UTF_8)));
                 case AuthConfig.Hmac h -> hmac(h, header, rawBody);
@@ -41,7 +42,7 @@ public final class AuthVerifier {
     }
 
     private static boolean hmac(AuthConfig.Hmac h, Function<String, String> header, byte[] body) throws Exception {
-        if (h.header() == null || h.secret() == null) return false;
+        if (blank(h.header()) || blank(h.secret())) return false;
         String value = header.apply(h.header());
         if (value == null) return false;
         String prefix = h.prefix();
@@ -56,6 +57,10 @@ public final class AuthVerifier {
                 ? Base64.getDecoder().decode(value)
                 : HexFormat.of().parseHex(value.toLowerCase(Locale.ROOT));
         return MessageDigest.isEqual(expected, actual);
+    }
+
+    private static boolean blank(String s) {
+        return s == null || s.isBlank();
     }
 
     private static boolean eq(String actual, String expected) {

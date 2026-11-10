@@ -51,6 +51,17 @@ class AuthVerifierTest {
     }
 
     @Test
+    void blankSecretsAreRejected() {
+        assertThat(verify(new SecretHeader("X-Token", ""), headers("X-Token", ""))).isFalse();
+        assertThat(verify(new SecretHeader("X-Token", "  "), headers("X-Token", "  "))).isFalse();
+        assertThat(verify(new Bearer(""), headers("Authorization", "Bearer "))).isFalse();
+        assertThat(verify(new Bearer(" "), headers("Authorization", "Bearer  "))).isFalse();
+        String blank = "Basic " + Base64.getEncoder().encodeToString(":".getBytes(StandardCharsets.UTF_8));
+        assertThat(verify(new Basic("", ""), headers("Authorization", blank))).isFalse();
+        assertThat(verify(new Hmac("X-Sig", "", "HmacSHA256", null, Encoding.HEX), headers("X-Sig", "00"))).isFalse();
+    }
+
+    @Test
     void basic() {
         var a = new Basic("u", "p");
         String ok = "Basic " + Base64.getEncoder().encodeToString("u:p".getBytes(StandardCharsets.UTF_8));
