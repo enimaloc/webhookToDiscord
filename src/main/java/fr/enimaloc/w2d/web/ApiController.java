@@ -102,10 +102,12 @@ public final class ApiController {
         if (script == null || !script.isTextual()) {
             throw badRequest("script must be a string");
         }
+        rejectNul(script.asText(), "script");
         AuthConfig auth = existing.auth();
         JsonNode authNode = body.get("auth");
         if (authNode != null && !authNode.isNull()) {
             auth = parseAuth(authNode).mergeSecretsFrom(existing.auth());
+            requireComplete(auth);
         }
         Endpoint updated;
         try {
@@ -265,6 +267,7 @@ public final class ApiController {
             throw badRequest("name is required");
         }
         String value = name.asText().strip();
+        rejectNul(value, "name");
         if (value.length() > MAX_NAME_LENGTH) {
             throw badRequest("name must be at most " + MAX_NAME_LENGTH + " characters");
         }
@@ -280,6 +283,11 @@ public final class ApiController {
             throw badRequest("unknown auth type");
         }
         ObjectNode normalized = ((ObjectNode) node).deepCopy().put("type", type);
+        normalized.properties().forEach(field -> {
+            if (field.getValue().isTextual()) {
+                rejectNul(field.getValue().asText(), "auth." + field.getKey());
+            }
+        });
         try {
             AuthConfig auth = Json.MAPPER.treeToValue(normalized, AuthConfig.class);
             if (auth == null) {
@@ -288,6 +296,44 @@ public final class ApiController {
             return auth;
         } catch (JsonProcessingException | IllegalArgumentException e) {
             throw badRequest("invalid auth");
+        }
+    }
+
+    /** PostgreSQL text and jsonb cannot store U+0000. */
+    private static void rejectNul(String value, String field) {
+        if (value.indexOf('\u0000') >= 0) {
+            throw badRequest(field + " must not contain NUL characters");
+        }
+    }
+
+    /** After merging stored secrets, an auth config missing its secret would reject every webhook call. */
+    private static void requireComplete(AuthConfig auth) {
+        String missing = switch (auth) {
+            case AuthConfig.None n -> null;
+            case AuthConfig.Bearer b -> blank(b.token()) ? "auth.token is required" : null;
+            case AuthConfig.SecretHeader h -> blank(h.header()) ? "auth.header is required"
+                    : blank(h.value()) ? "auth.value is required" : null;
+            case AuthConfig.Basic b -> b.username() == null ? "auth.username is required"
+                    : b.password() == null || b.password().isEmpty() ? "auth.password is required" : null;
+            case AuthConfig.Hmac h -> blank(h.header()) ? "auth.header is required"
+                    : blank(h.secret()) ? "auth.secret is required"
+                    : !macAvailable(h.algorithm()) ? "auth.algorithm is not supported" : null;
+        };
+        if (missing != null) {
+            throw badRequest(missing);
+        }
+    }
+
+    private static boolean blank(String s) {
+        return s == null || s.isBlank();
+    }
+
+    private static boolean macAvailable(String algorithm) {
+        try {
+            javax.crypto.Mac.getInstance(algorithm);
+            return true;
+        } catch (java.security.NoSuchAlgorithmException e) {
+            return false;
         }
     }
 

@@ -24,6 +24,21 @@ public final class SessionTokens {
         this.clock = clock;
     }
 
+    /**
+     * Tokens keyed by HMAC-SHA256(sessionSecret, "w2d-admin:" + adminPassword): changing the admin password
+     * revokes every issued session. Logout is stateless, so a token otherwise lives until its TTL (12 h).
+     */
+    public static SessionTokens forAdmin(byte[] sessionSecret, String adminPassword, Clock clock) {
+        try {
+            Mac mac = Mac.getInstance(ALGORITHM);
+            mac.init(new SecretKeySpec(sessionSecret, ALGORITHM));
+            byte[] key = mac.doFinal(("w2d-admin:" + adminPassword).getBytes(StandardCharsets.UTF_8));
+            return new SessionTokens(key, clock);
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     public String issue(Duration ttl) {
         String expiry = Long.toString(clock.instant().plus(ttl).getEpochSecond());
         return expiry + "." + Base64.getUrlEncoder().withoutPadding().encodeToString(sign(expiry));

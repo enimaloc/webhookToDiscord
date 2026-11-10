@@ -5,6 +5,7 @@ import fr.enimaloc.w2d.json.Json;
 import io.javalin.config.RoutesConfig;
 import io.javalin.http.Context;
 import io.javalin.http.Cookie;
+import io.javalin.http.HandlerType;
 import io.javalin.http.HttpStatus;
 import io.javalin.http.SameSite;
 
@@ -16,6 +17,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 
 /** Password login issuing a signed session cookie, plus the guard protecting {@code /api/*}. */
 public final class AdminAuth {
@@ -25,6 +27,9 @@ public final class AdminAuth {
     /** Failure counters are forgotten once the client has been quiet this long after its delay expired. */
     private static final Duration FORGET_AFTER = Duration.ofMinutes(15);
     private static final int MAX_TRACKED_CLIENTS = 10_000;
+
+    private static final Set<HandlerType> MUTATING =
+            Set.of(HandlerType.POST, HandlerType.PUT, HandlerType.PATCH, HandlerType.DELETE);
 
     private final byte[] passwordDigest;
     private final SessionTokens tokens;
@@ -56,6 +61,13 @@ public final class AdminAuth {
     }
 
     private void guard(Context ctx) {
+        // CSRF: SameSite is site-wide (sibling subdomains are same-site), so mutations must be JSON,
+        // which a cross-origin page can only send after a CORS preflight we never grant.
+        if (MUTATING.contains(ctx.method()) && !isJson(ctx.header("Content-Type"))) {
+            ctx.skipRemainingHandlers();
+            ctx.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE).json(Map.of("error", "Content-Type must be application/json"));
+            return;
+        }
         // the matched route, not the raw URI, so dot-segments or encodings cannot dodge the check
         String path = ctx.endpoints().matchedHttpEndpoint().path;
         if (path.equals("/api/login") || path.equals("/api/session")) {
@@ -124,6 +136,14 @@ public final class AdminAuth {
         }
     }
 
+    private static boolean isJson(String contentType) {
+        if (contentType == null) {
+            return false;
+        }
+        int semi = contentType.indexOf(';');
+        return (semi < 0 ? contentType : contentType.substring(0, semi)).trim().equalsIgnoreCase("application/json");
+    }
+
     private static Cookie cookie(Context ctx, String value, int maxAge) {
         return new Cookie(COOKIE, value, "/", maxAge, secure(ctx), true, null, SameSite.STRICT);
     }
@@ -133,10 +153,22 @@ public final class AdminAuth {
         return "https".equalsIgnoreCase(proto) || "https".equalsIgnoreCase(ctx.scheme());
     }
 
-    /** The app runs behind Traefik, which sets X-Forwarded-For; its first value is the client. */
+    /**
+     * The app runs behind Traefik, which appends the peer address to X-Forwarded-For. Earlier entries are
+     * client-controlled, so only the rightmost non-empty one is trusted.
+     */
     static String clientKey(Context ctx) {
-        String forwarded = firstValue(ctx.header("X-Forwarded-For"));
-        return forwarded != null && !forwarded.isEmpty() ? forwarded : ctx.ip();
+        String forwarded = ctx.header("X-Forwarded-For");
+        if (forwarded != null) {
+            String[] parts = forwarded.split(",");
+            for (int i = parts.length - 1; i >= 0; i--) {
+                String candidate = parts[i].trim();
+                if (!candidate.isEmpty()) {
+                    return candidate;
+                }
+            }
+        }
+        return ctx.ip();
     }
 
     private static String firstValue(String header) {

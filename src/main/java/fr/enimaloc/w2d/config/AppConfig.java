@@ -1,8 +1,10 @@
 package fr.enimaloc.w2d.config;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.Map;
 
@@ -18,14 +20,24 @@ public record AppConfig(
         long maxBodyBytes,
         byte[] sessionSecret) {
 
+    private static final Logger LOG = LoggerFactory.getLogger(AppConfig.class);
+    private static final int GENERATED_SECRET_BYTES = 32;
+
     public static AppConfig fromEnv(Map<String, String> env) {
         String adminPassword = required(env, "ADMIN_PASSWORD");
         String databaseUrl = required(env, "DATABASE_URL");
         int port = Integer.parseInt(env.getOrDefault("PORT", "8080"));
         String secret = env.get("SESSION_SECRET");
-        byte[] sessionSecret = secret != null && !secret.isEmpty()
-                ? secret.getBytes(StandardCharsets.UTF_8)
-                : sha256("w2d-session:" + adminPassword);
+        byte[] sessionSecret;
+        if (secret != null && !secret.isBlank()) {
+            sessionSecret = secret.getBytes(StandardCharsets.UTF_8);
+        } else {
+            // never derived from ADMIN_PASSWORD: a stolen token must not enable offline password cracking
+            sessionSecret = new byte[GENERATED_SECRET_BYTES];
+            new SecureRandom().nextBytes(sessionSecret);
+            LOG.warn("SESSION_SECRET is not set: using a random per-process secret; admin sessions will not be "
+                    + "shared across pods and will be lost on restart");
+        }
         return new AppConfig(
                 databaseUrl,
                 env.get("DB_USER"),
@@ -47,11 +59,4 @@ public record AppConfig(
         return value;
     }
 
-    private static byte[] sha256(String input) {
-        try {
-            return MessageDigest.getInstance("SHA-256").digest(input.getBytes(StandardCharsets.UTF_8));
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException(e);
-        }
-    }
 }

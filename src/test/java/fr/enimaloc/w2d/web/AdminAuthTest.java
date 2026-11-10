@@ -40,8 +40,13 @@ class AdminAuthTest {
             var b = HttpRequest.newBuilder(URI.create("http://localhost:" + server.port() + path))
                     .method(method, body == null ? HttpRequest.BodyPublishers.noBody()
                             : HttpRequest.BodyPublishers.ofString(body));
+            boolean hasContentType = false;
             for (int i = 0; i < headers.length; i += 2) {
+                hasContentType |= headers[i].equalsIgnoreCase("Content-Type");
                 b.header(headers[i], headers[i + 1]);
+            }
+            if (!hasContentType) {
+                b.header("Content-Type", "application/json");
             }
             return HttpClient.newHttpClient().send(b.build(), HttpResponse.BodyHandlers.ofString());
         } catch (Exception e) {
@@ -162,9 +167,11 @@ class AdminAuthTest {
     @Test
     void throttlingIsPerForwardedClient() {
         JavalinTest.test(app(), (server, client) -> {
-            assertThat(login(server, "nope", "X-Forwarded-For", "10.0.0.1, 172.16.0.1").statusCode()).isEqualTo(401);
-            assertThat(login(server, "hunter2", "X-Forwarded-For", "10.0.0.1").statusCode()).isEqualTo(429);
-            assertThat(login(server, "hunter2", "X-Forwarded-For", "10.0.0.2, 172.16.0.1").statusCode())
+            // only the rightmost entry (appended by our proxy) counts; spoofed leftmost values are ignored
+            assertThat(login(server, "nope", "X-Forwarded-For", "1.1.1.1, 10.0.0.1").statusCode()).isEqualTo(401);
+            assertThat(login(server, "hunter2", "X-Forwarded-For", "2.2.2.2, 10.0.0.1").statusCode()).isEqualTo(429);
+            assertThat(login(server, "hunter2", "X-Forwarded-For", "10.0.0.1 ,").statusCode()).isEqualTo(429);
+            assertThat(login(server, "hunter2", "X-Forwarded-For", "1.1.1.1, 10.0.0.2").statusCode())
                     .isEqualTo(204);
         });
     }
@@ -177,6 +184,22 @@ class AdminAuthTest {
             clock.advance(Duration.ofHours(1));
             assertThat(login(server, "nope", "X-Forwarded-For", "10.0.0.2").statusCode()).isEqualTo(401);
             assertThat(auth.trackedClients()).isEqualTo(1);
+        });
+    }
+
+    @Test
+    void mutatingApiCallsRequireJsonContentType() {
+        JavalinTest.test(app(), (server, client) -> {
+            assertThat(login(server, "hunter2", "Content-Type", "text/plain").statusCode()).isEqualTo(415);
+            assertThat(login(server, "hunter2", "Content-Type", "application/x-www-form-urlencoded").statusCode())
+                    .isEqualTo(415);
+            String cookie = sessionCookie(login(server, "hunter2", "Content-Type", "application/json; charset=utf-8"));
+            assertThat(send(server, "POST", "/api/logout", null, "Cookie", cookie, "Content-Type", "text/plain")
+                    .statusCode()).isEqualTo(415);
+            assertThat(send(server, "POST", "/api/logout", null, "Cookie", cookie).statusCode()).isEqualTo(204);
+            // reads need no content type
+            assertThat(send(server, "GET", "/api/secret", null, "Cookie", cookie, "Content-Type", "text/plain")
+                    .statusCode()).isEqualTo(200);
         });
     }
 

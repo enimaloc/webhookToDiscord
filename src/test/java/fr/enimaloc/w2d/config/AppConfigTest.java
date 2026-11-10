@@ -22,6 +22,17 @@ class AppConfigTest {
     }
 
     @Test
+    void generatedSessionSecretIsRandomAndNotDerivedFromPassword() {
+        Map<String, String> env = Map.of("ADMIN_PASSWORD", "pw", "DATABASE_URL", "jdbc:postgresql://x/db");
+        var a = AppConfig.fromEnv(env);
+        var b = AppConfig.fromEnv(env);
+        assertThat(a.sessionSecret()).hasSize(32).isNotEqualTo(b.sessionSecret());
+        var blank = AppConfig.fromEnv(Map.of("ADMIN_PASSWORD", "pw", "DATABASE_URL", "jdbc:postgresql://x/db",
+                "SESSION_SECRET", "   "));
+        assertThat(blank.sessionSecret()).hasSize(32).isNotEqualTo(a.sessionSecret());
+    }
+
+    @Test
     void missingAdminPasswordFails() {
         assertThatThrownBy(() -> AppConfig.fromEnv(Map.of("DATABASE_URL", "jdbc:postgresql://x/db")))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("ADMIN_PASSWORD");

@@ -41,7 +41,7 @@ public final class App {
         WebhookController webhook = new WebhookController(endpoints, history, processor::trigger,
                 config.maxBodyBytes());
         Clock clock = Clock.systemUTC();
-        AdminAuth auth = new AdminAuth(config.adminPassword(), new SessionTokens(config.sessionSecret(), clock), clock);
+        AdminAuth auth = new AdminAuth(config.adminPassword(), SessionTokens.forAdmin(config.sessionSecret(), config.adminPassword(), clock), clock);
         ApiController api = new ApiController(endpoints, history, pipeline, config.publicBaseUrl());
         return Javalin.create(cfg -> {
             cfg.http.maxRequestSize = config.maxBodyBytes();

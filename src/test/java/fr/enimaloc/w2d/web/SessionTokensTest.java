@@ -54,6 +54,18 @@ class SessionTokensTest {
     }
 
     @Test
+    void changingAdminPasswordRevokesSessions() {
+        Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
+        String token = SessionTokens.forAdmin(SECRET, "pw1", clock).issue(Duration.ofHours(12));
+        assertThat(SessionTokens.forAdmin(SECRET, "pw1", clock).valid(token)).isTrue();
+        assertThat(SessionTokens.forAdmin(SECRET, "pw2", clock).valid(token)).isFalse();
+        assertThat(SessionTokens.forAdmin("other".getBytes(StandardCharsets.UTF_8), "pw1", clock).valid(token))
+                .isFalse();
+        // the session key is not the raw secret
+        assertThat(tokens(SECRET, NOW).valid(token)).isFalse();
+    }
+
+    @Test
     void malformedTokensAreInvalid() {
         SessionTokens t = tokens(SECRET, NOW);
         assertThat(t.valid(null)).isFalse();

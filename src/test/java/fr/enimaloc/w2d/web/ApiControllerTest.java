@@ -55,7 +55,7 @@ class ApiControllerTest extends PostgresTest {
 
     private Javalin app() {
         Clock clock = Clock.systemUTC();
-        AdminAuth auth = new AdminAuth(PASSWORD, new SessionTokens("k".getBytes(StandardCharsets.UTF_8), clock), clock);
+        AdminAuth auth = new AdminAuth(PASSWORD, SessionTokens.forAdmin("k".getBytes(StandardCharsets.UTF_8), PASSWORD, clock), clock);
         ApiController api = new ApiController(endpoints, history,
                 new Pipeline(endpoints, history, runner, discord.sender()), BASE_URL);
         return Javalin.create(cfg -> {
@@ -262,6 +262,73 @@ class ApiControllerTest extends PostgresTest {
             assertThat(send(server, "POST", replay, "{\"mode\":\"preview\",\"script\":1}", cookie).statusCode())
                     .isEqualTo(400);
             assertThat(history.executionsOf(rid)).isEmpty();
+        });
+    }
+
+    @Test
+    void nulCharactersAre400() {
+        Endpoint e = endpoints.create("e");
+        JavalinTest.test(app(), (server, client) -> {
+            String cookie = login(server);
+            String path = "/api/endpoints/" + e.id();
+            assertThat(send(server, "POST", "/api/endpoints", "{\"name\":\"a\\u0000b\"}", cookie).statusCode())
+                    .isEqualTo(400);
+            assertThat(send(server, "PUT", path,
+                    "{\"name\":\"a\\u0000\",\"enabled\":true,\"script\":\"\"}", cookie).statusCode())
+                    .isEqualTo(400);
+            assertThat(send(server, "PUT", path,
+                    "{\"name\":\"a\",\"enabled\":true,\"script\":\"x\\u0000\"}", cookie).statusCode())
+                    .isEqualTo(400);
+            var auth = send(server, "PUT", path, "{\"name\":\"a\",\"enabled\":true,\"script\":\"\","
+                    + "\"auth\":{\"type\":\"bearer\",\"token\":\"t\\u0000\"}}", cookie);
+            assertThat(auth.statusCode()).isEqualTo(400);
+            assertThat(json(auth).get("error").isTextual()).isTrue();
+            assertThat(endpoints.find(e.id()).orElseThrow().name()).isEqualTo("e");
+        });
+    }
+
+    @Test
+    void authWithoutSecretIs400() {
+        Endpoint e = endpoints.create("e");
+        JavalinTest.test(app(), (server, client) -> {
+            String cookie = login(server);
+            String path = "/api/endpoints/" + e.id();
+            String prefix = "{\"name\":\"e\",\"enabled\":true,\"script\":\"\",\"auth\":";
+            assertThat(send(server, "PUT", path, prefix + "{\"type\":\"bearer\"}}", cookie).statusCode())
+                    .isEqualTo(400);
+            assertThat(send(server, "PUT", path, prefix + "{\"type\":\"secretHeader\",\"value\":\"v\"}}", cookie)
+                    .statusCode()).isEqualTo(400);
+            assertThat(send(server, "PUT", path, prefix + "{\"type\":\"basic\",\"username\":\"u\"}}", cookie)
+                    .statusCode()).isEqualTo(400);
+            assertThat(send(server, "PUT", path,
+                    prefix + "{\"type\":\"hmac\",\"header\":\"X-Sig\",\"secret\":\"s\",\"algorithm\":\"Nope\"}}",
+                    cookie).statusCode()).isEqualTo(400);
+            assertThat(endpoints.find(e.id()).orElseThrow().auth()).isEqualTo(new AuthConfig.None());
+
+            assertThat(send(server, "PUT", path, prefix + "{\"type\":\"bearer\",\"token\":\"t\"}}", cookie)
+                    .statusCode()).isEqualTo(200);
+            // the stored secret satisfies the requirement on later updates
+            assertThat(send(server, "PUT", path, prefix + "{\"type\":\"bearer\"}}", cookie).statusCode())
+                    .isEqualTo(200);
+            assertThat(endpoints.find(e.id()).orElseThrow().auth()).isEqualTo(new AuthConfig.Bearer("t"));
+        });
+    }
+
+    @Test
+    void mutationsRequireJsonContentType() {
+        Endpoint e = endpoints.create("e");
+        JavalinTest.test(app(), (server, client) -> {
+            String cookie = login(server);
+            try {
+                var r = HttpClient.newHttpClient().send(HttpRequest.newBuilder(
+                                URI.create("http://localhost:" + server.port() + "/api/endpoints/" + e.id()))
+                        .header("Cookie", cookie).header("Content-Type", "text/plain").DELETE().build(),
+                        HttpResponse.BodyHandlers.ofString());
+                assertThat(r.statusCode()).isEqualTo(415);
+            } catch (Exception ex) {
+                throw new IllegalStateException(ex);
+            }
+            assertThat(endpoints.find(e.id())).isPresent();
         });
     }
 
