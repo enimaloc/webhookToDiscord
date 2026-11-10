@@ -139,6 +139,19 @@ class WebhookControllerTest extends PostgresTest {
     }
 
     @Test
+    void schedulerFailureStill202() {
+        Endpoint e = create(new AuthConfig.None(), true);
+        var controller = new WebhookController(endpoints, history, id -> {
+            throw new java.util.concurrent.RejectedExecutionException("full");
+        }, 1024);
+        var app = Javalin.create(cfg -> controller.register(cfg.routes));
+        JavalinTest.test(app, (server, client) -> {
+            assertThat(post(server, "/webhook/" + e.id(), "x").statusCode()).isEqualTo(202);
+            assertThat(stored(e.id())).hasSize(1);
+        });
+    }
+
+    @Test
     void queryStored() {
         Endpoint e = create(new AuthConfig.None(), true);
         JavalinTest.test(app(1024), (server, client) -> {

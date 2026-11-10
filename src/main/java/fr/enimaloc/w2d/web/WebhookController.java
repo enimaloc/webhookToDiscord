@@ -8,6 +8,8 @@ import io.javalin.config.RoutesConfig;
 import io.javalin.http.Context;
 import io.javalin.http.Handler;
 import io.javalin.http.HttpStatus;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import jakarta.servlet.http.HttpServletRequest;
 
 import java.io.IOException;
@@ -21,6 +23,8 @@ import java.util.function.Consumer;
 
 /** Public ingestion endpoint: stores the raw request, then asks the processor to drain the entry. */
 public final class WebhookController {
+    private static final Logger LOG = LoggerFactory.getLogger(WebhookController.class);
+
     private final EndpointRepository endpoints;
     private final HistoryRepository history;
     private final Consumer<String> onAccepted;
@@ -65,7 +69,12 @@ public final class WebhookController {
         long id = history.insertPending(endpoint.id(), ctx.method().name(), headers(ctx.req()),
                 ctx.queryString() == null ? "" : ctx.queryString(),
                 body, AuthVerifier.maskedHeaders(endpoint.auth()));
-        onAccepted.accept(endpoint.id());
+        try {
+            onAccepted.accept(endpoint.id());
+        } catch (RuntimeException e) {
+            // already persisted as pending; it is picked up by the next drain or the startup resume
+            LOG.error("Could not schedule processing for endpoint {}", endpoint.id(), e);
+        }
         ctx.status(HttpStatus.ACCEPTED).json(Map.of("requestId", id));
     }
 

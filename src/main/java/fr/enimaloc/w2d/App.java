@@ -3,6 +3,7 @@ package fr.enimaloc.w2d;
 import fr.enimaloc.w2d.config.AppConfig;
 import fr.enimaloc.w2d.db.Database;
 import fr.enimaloc.w2d.discord.DiscordSender;
+import fr.enimaloc.w2d.endpoint.Endpoint;
 import fr.enimaloc.w2d.endpoint.EndpointRepository;
 import fr.enimaloc.w2d.history.HistoryRepository;
 import fr.enimaloc.w2d.history.RetentionJob;
@@ -18,6 +19,7 @@ import io.javalin.Javalin;
 import java.time.Clock;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public final class App {
@@ -34,9 +36,8 @@ public final class App {
     }
 
     /** Fully wired app; the caller owns the lifecycle of the given resources. */
-    public static Javalin create(AppConfig config, Database db, EntryProcessor processor, Pipeline pipeline) {
-        EndpointRepository endpoints = new EndpointRepository(db.jdbi());
-        HistoryRepository history = new HistoryRepository(db.jdbi());
+    public static Javalin create(AppConfig config, EndpointRepository endpoints, HistoryRepository history,
+                                 EntryProcessor processor, Pipeline pipeline) {
         WebhookController webhook = new WebhookController(endpoints, history, processor::trigger,
                 config.maxBodyBytes());
         Clock clock = Clock.systemUTC();
@@ -50,6 +51,15 @@ public final class App {
             auth.register(cfg.routes);
             api.register(cfg.routes);
         });
+    }
+
+    /** Re-triggers entries that still have never-started pending requests (e.g. after a restart). */
+    static void resumePending(EndpointRepository endpoints, HistoryRepository history, EntryProcessor processor) {
+        for (Endpoint e : endpoints.list()) {
+            if (history.hasPending(e.id())) {
+                processor.trigger(e.id());
+            }
+        }
     }
 
     public static void main(String[] args) {
@@ -70,14 +80,24 @@ public final class App {
         RetentionJob retention = new RetentionJob(history, config.retentionDays());
         retention.start();
 
-        Javalin app = create(config, db, processor, pipeline);
+        Javalin app = create(config, endpoints, history, processor, pipeline);
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             app.stop();
             retention.stop();
             executor.shutdown();
+            try {
+                long graceMs = config.scriptTimeout().toMillis() + 10_000;
+                if (!executor.awaitTermination(graceMs, TimeUnit.MILLISECONDS)) {
+                    executor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                executor.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
             runner.close();
             db.close();
         }));
         app.start(config.port());
+        resumePending(endpoints, history, processor);
     }
 }
