@@ -159,4 +159,21 @@ class WebhookControllerTest extends PostgresTest {
             assertThat(stored(e.id()).get(0).query()).isEqualTo("a=1&b=2");
         });
     }
+
+    @Test
+    void formUrlEncodedBodyStoredRaw() {
+        Endpoint e = create(new AuthConfig.None(), true);
+        JavalinTest.test(app(1024), (server, client) -> {
+            var request = HttpRequest.newBuilder(URI.create("http://localhost:" + server.port() + "/webhook/" + e.id()))
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .POST(HttpRequest.BodyPublishers.ofString("a=1&b=2")).build();
+            var r = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+            assertThat(r.statusCode()).isEqualTo(202);
+            List<IncomingRequest> rows = stored(e.id());
+            assertThat(rows).hasSize(1);
+            assertThat(new String(history.findRequest(rows.get(0).id()).orElseThrow().body(), StandardCharsets.UTF_8))
+                    .isEqualTo("a=1&b=2");
+            assertThat(rows.get(0).query()).isEmpty();
+        });
+    }
 }
