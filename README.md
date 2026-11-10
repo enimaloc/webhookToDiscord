@@ -23,7 +23,7 @@ function handle(request) {
 
 | Variable | Défaut | Description |
 |---|---|---|
-| `DATABASE_URL` | - | URL JDBC PostgreSQL (`jdbc:postgresql://host:5432/db`) |
+| `DATABASE_URL` | - (obligatoire) | URL JDBC PostgreSQL (`jdbc:postgresql://host:5432/db`) |
 | `DB_USER` / `DB_PASSWORD` | - | Identifiants de la base |
 | `ADMIN_PASSWORD` | - (obligatoire) | Mot de passe du panneau |
 | `SESSION_SECRET` | aléatoire par processus | Secret de signature des sessions. **Obligatoire avec plusieurs replicas** (même valeur partout), recommandé dans tous les cas |
