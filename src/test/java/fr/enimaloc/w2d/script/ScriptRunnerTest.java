@@ -5,6 +5,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.charset.StandardCharsets;
@@ -14,6 +15,8 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
+import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class ScriptRunnerTest {
@@ -125,6 +128,7 @@ class ScriptRunnerTest {
         var r = runner.run("function handle(){ return [{url:'" + URL + "', message:{content:'x'.repeat(1100000)}}]; }",
                 req("{}"));
         assertThat(r.ok()).isFalse();
+        assertThat(r.error()).contains("1 MiB");
     }
 
     @Test
@@ -141,10 +145,26 @@ class ScriptRunnerTest {
         assertThat(after.messages()).hasSize(1);
     }
 
-    @Test
-    void noHostAccess() {
-        var r = runner.run("function handle(){ var S = Java.type('java.lang.System'); S.exit(1); return []; }", req("{}"));
+    @ParameterizedTest
+    @CsvSource(delimiter = '|', quoteCharacter = '"', value = {
+            "function handle(){ var S = Java.type('java.lang.System'); S.exit(1); return []; } | Access to host class java.lang.System is not allowed",
+            "function handle(){ load('/etc/passwd'); return []; } | Operation is not allowed for: /etc/passwd",
+            "function handle(){ load('https://example.com/x.js'); return []; } | Cannot load script",
+            "function handle(){ return Polyglot.eval('js', '1'); } | Polyglot is not defined",
+            "function handle(){ return Packages.java.lang.System.getenv(); } | is not a function",
+            "function handle(){ return java.lang.System.getenv(); } | is not a function"
+    })
+    void sandboxEscapesAreBlocked(String script, String expectedError) {
+        var r = runner.run(script, req("{}"));
         assertThat(r.ok()).isFalse();
+        assertThat(r.error()).contains(expectedError);
+    }
+
+    @Test
+    void invalidTimeoutRejected() {
+        assertThatNullPointerException().isThrownBy(() -> new ScriptRunner(null));
+        assertThatIllegalArgumentException().isThrownBy(() -> new ScriptRunner(Duration.ZERO));
+        assertThatIllegalArgumentException().isThrownBy(() -> new ScriptRunner(Duration.ofMillis(-1)));
     }
 
     @Test

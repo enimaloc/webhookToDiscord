@@ -18,9 +18,10 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.Executors;
+import java.util.Objects;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -37,9 +38,11 @@ public final class ScriptRunner implements AutoCloseable {
             (function (req) {
               if (typeof handle !== 'function') throw new Error('handle(request) is not defined');
               const r = handle(JSON.parse(req));
-              return r == null ? '[]' : JSON.stringify(r);
+              const s = r == null ? '[]' : JSON.stringify(r);
+              if (typeof s === 'string' && s.length > %d) throw new Error('Script result exceeds the 1 MiB limit');
+              return s;
             })
-            """;
+            """.formatted(MAX_RESULT_BYTES);
     private static final Source HARNESS_SOURCE = Source.newBuilder("js", HARNESS, "harness.js").buildLiteral();
 
     private final Duration timeout;
@@ -47,15 +50,22 @@ public final class ScriptRunner implements AutoCloseable {
     private final ScheduledExecutorService watchdog;
 
     public ScriptRunner(Duration timeout) {
+        Objects.requireNonNull(timeout, "timeout");
+        if (timeout.isZero() || timeout.isNegative()) {
+            throw new IllegalArgumentException("timeout must be positive: " + timeout);
+        }
         this.timeout = timeout;
         this.engine = Engine.newBuilder("js")
                 .option("engine.WarnInterpreterOnly", "false")
                 .build();
-        this.watchdog = Executors.newSingleThreadScheduledExecutor(r -> {
+        ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(1, r -> {
             Thread t = new Thread(r, "script-watchdog");
             t.setDaemon(true);
             return t;
         });
+        // cancelled kill tasks must not stay queued, holding references to closed contexts
+        executor.setRemoveOnCancelPolicy(true);
+        this.watchdog = executor;
     }
 
     public ScriptResult run(String script, ScriptRequest request) {
