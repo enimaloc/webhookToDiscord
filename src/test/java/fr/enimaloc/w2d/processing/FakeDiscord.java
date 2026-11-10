@@ -12,17 +12,17 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /** Local stand-in for Discord: records the {@code content} of every message posted to webhook 1. */
-final class FakeDiscord implements AutoCloseable {
-    static final String TOKEN = "secretTok";
-    static final String URL = "https://discord.com/api/webhooks/1/" + TOKEN;
+public final class FakeDiscord implements AutoCloseable {
+    public static final String TOKEN = "secretTok";
+    public static final String URL = "https://discord.com/api/webhooks/1/" + TOKEN;
 
-    final List<String> contents = new CopyOnWriteArrayList<>();
-    final CountDownLatch firstRequest = new CountDownLatch(1);
-    final AtomicInteger maxInFlight = new AtomicInteger();
+    public final List<String> contents = new CopyOnWriteArrayList<>();
+    public final CountDownLatch firstRequest = new CountDownLatch(1);
+    public final AtomicInteger maxInFlight = new AtomicInteger();
     private final AtomicInteger inFlight = new AtomicInteger();
     private final Javalin server;
 
-    FakeDiscord(int status, long delayMs) {
+    public FakeDiscord(int status, long delayMs) {
         server = Javalin.create(cfg -> cfg.routes.post("/api/webhooks/1/" + TOKEN, ctx -> {
             maxInFlight.accumulateAndGet(inFlight.incrementAndGet(), Math::max);
             try {
@@ -43,7 +43,7 @@ final class FakeDiscord implements AutoCloseable {
         server.start(0);
     }
 
-    DiscordSender sender() {
+    public DiscordSender sender() {
         String base = "http://localhost:" + server.port();
         return new DiscordSender(HttpClient.newHttpClient(), d -> {
         }, u -> u.replace("https://discord.com", base));
