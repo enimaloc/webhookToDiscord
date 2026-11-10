@@ -1,6 +1,7 @@
 'use strict';
 
 const MONACO_BASE = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs';
+const MONACO_TIMEOUT_MS = 10000;
 const app = document.getElementById('app');
 const topbar = document.getElementById('topbar');
 let navId = 0;
@@ -62,6 +63,14 @@ function errText(e) {
   return e instanceof ApiError ? e.message : String(e);
 }
 
+/** Replay error text; 409 means the request is still pending and owned by the processor. */
+function replayErrText(e) {
+  if (e instanceof ApiError && e.status === 409) {
+    return 'Requête en cours de traitement, réessayez quand elle sera terminée (' + e.message + ').';
+  }
+  return errText(e);
+}
+
 function fmtDate(iso) {
   if (!iso) return '-';
   const d = new Date(iso);
@@ -111,7 +120,13 @@ let monacoPromise = null;
 
 function loadMonaco() {
   if (monacoPromise) return monacoPromise;
+  if (window.monaco && window.monaco.editor) return Promise.resolve(window.monaco);
+  const stale = document.getElementById('monaco-loader');
+  if (stale) stale.remove();
   monacoPromise = new Promise((resolve, reject) => {
+    // a stalled CDN must not block the page: fall back to the plain editor
+    const timer = setTimeout(() => reject(new Error('Monaco : délai dépassé')), MONACO_TIMEOUT_MS);
+    const fail = (e) => { clearTimeout(timer); reject(e); };
     window.MonacoEnvironment = {
       getWorkerUrl() {
         const src = "self.MonacoEnvironment={baseUrl:'" + MONACO_BASE + "/../'};importScripts('" +
@@ -120,11 +135,14 @@ function loadMonaco() {
       }
     };
     const s = document.createElement('script');
+    s.id = 'monaco-loader';
     s.src = MONACO_BASE + '/loader.js';
-    s.onerror = () => reject(new Error('Monaco indisponible'));
+    s.onerror = () => fail(new Error('Monaco indisponible'));
     s.onload = () => {
-      window.require.config({ paths: { vs: MONACO_BASE } });
-      window.require(['vs/editor/editor.main'], () => resolve(window.monaco), reject);
+      try {
+        window.require.config({ paths: { vs: MONACO_BASE } });
+        window.require(['vs/editor/editor.main'], () => { clearTimeout(timer); resolve(window.monaco); }, fail);
+      } catch (e) { fail(e); }
     };
     document.head.append(s);
   });
@@ -294,7 +312,8 @@ async function renderEdit(id, endpointId) {
   }
 
   const saveMsg = el('div', { role: 'status' });
-  const saveBtn = el('button', { type: 'button' }, 'Enregistrer');
+  // enabled once the editor (Monaco or textarea fallback) is mounted
+  const saveBtn = el('button', { type: 'button', disabled: true }, 'Enregistrer');
   const editorBox = el('div', { id: 'editor' });
   let editor = null;
 
@@ -352,6 +371,7 @@ async function renderEdit(id, endpointId) {
   editor = await mountEditor(editorBox, ep.script || '');
   if (id !== navId) { editor.dispose(); return; }
   currentEditor = editor;
+  saveBtn.disabled = false;
 
   buildTestPanel(testPanel, endpointId, () => editor.getValue());
 }
@@ -368,28 +388,46 @@ async function buildTestPanel(panel, endpointId, getScript) {
     panel.append(el('p', { class: 'muted' }, 'Aucune requête reçue : envoyez un webhook pour pouvoir tester le script.'));
     return;
   }
+  const statusOf = new Map(requests.map((r) => [String(r.id), r.status]));
   const sel = el('select', {}, requests.map((r) =>
     el('option', { value: r.id }, '#' + r.id + ' - ' + fmtDate(r.receivedAt) + ' - ' + r.method + ' - ' + r.status)));
   const out = el('div', {});
   const previewBtn = el('button', { type: 'button' }, 'Aperçu');
   const sendBtn = el('button', { type: 'button', class: 'secondary' }, 'Envoyer pour de vrai');
   const yesBtn = el('button', { type: 'button', class: 'danger' }, 'Oui, envoyer');
+  const pendingNote = el('span', { class: 'muted small', hidden: true },
+    'Requête en attente de traitement : envoi réel indisponible.');
   const confirmBox = el('span', { hidden: true, class: 'row' },
     el('span', { class: 'error' }, 'Envoyer réellement les messages sur Discord (script en cours d\'édition) ?'),
     yesBtn,
     el('button', { type: 'button', class: 'secondary', onclick: () => { confirmBox.hidden = true; sendBtn.hidden = false; } }, 'Annuler'));
+  let running = false;
+
+  // a pending request is delivered by the processor: sending it from here would deliver it twice
+  function refreshButtons() {
+    const pending = statusOf.get(String(sel.value)) === 'pending';
+    previewBtn.disabled = running;
+    sendBtn.disabled = running || pending;
+    yesBtn.disabled = running || pending;
+    pendingNote.hidden = !pending;
+    if (pending) { confirmBox.hidden = true; sendBtn.hidden = false; }
+  }
+  sel.addEventListener('change', refreshButtons);
 
   async function run(mode) {
+    if (running) return;
+    running = true;
+    refreshButtons();
     out.replaceChildren(el('p', { class: 'muted' }, 'Exécution…'));
-    previewBtn.disabled = true;
     try {
       const res = await api('POST', '/api/requests/' + encodeURIComponent(sel.value) + '/replay',
         { mode, script: getScript() });
       out.replaceChildren(renderResult(res));
     } catch (e) {
-      out.replaceChildren(el('div', { class: 'error' }, errText(e)));
+      out.replaceChildren(el('div', { class: 'error' }, replayErrText(e)));
     } finally {
-      previewBtn.disabled = false;
+      running = false;
+      refreshButtons();
     }
   }
   previewBtn.addEventListener('click', () => run('preview'));
@@ -397,9 +435,10 @@ async function buildTestPanel(panel, endpointId, getScript) {
   yesBtn.addEventListener('click', () => {
     confirmBox.hidden = true; sendBtn.hidden = false; run('send');
   });
+  refreshButtons();
   panel.append(
     el('label', {}, 'Requête reçue'), sel,
-    el('div', { class: 'row', style: 'margin-top:10px' }, previewBtn, sendBtn, confirmBox), out);
+    el('div', { class: 'row', style: 'margin-top:10px' }, previewBtn, sendBtn, confirmBox, pendingNote), out);
 }
 
 /** Renders a replay response ({status, error, logs, messages:[{url,message}], sends}). */
@@ -480,24 +519,37 @@ async function renderRequest(id, rid) {
   topbar.hidden = false;
 
   const out = el('div', {});
+  // a pending request is delivered by the processor: replaying it would deliver it twice
+  const pending = r.status === 'pending';
   const previewBtn = el('button', { type: 'button' }, 'Aperçu');
-  const replayBtn = el('button', { type: 'button', class: 'secondary' }, 'Rejouer');
+  const replayBtn = el('button', { type: 'button', class: 'secondary', hidden: pending }, 'Rejouer');
   const yesBtn = el('button', { type: 'button', class: 'danger' }, 'Oui, rejouer');
+  const pendingNote = pending
+    ? el('span', { class: 'muted small' }, 'Requête en attente de traitement : rejeu réel indisponible.') : null;
   const confirmBox = el('span', { hidden: true, class: 'row' },
     el('span', { class: 'error' }, 'Rejouer et envoyer réellement les messages sur Discord ?'),
     yesBtn,
     el('button', { type: 'button', class: 'secondary', onclick: () => { confirmBox.hidden = true; replayBtn.hidden = false; } }, 'Annuler'));
+  let running = false;
+
+  function setRunning(value) {
+    running = value;
+    previewBtn.disabled = value;
+    replayBtn.disabled = value;
+    yesBtn.disabled = value;
+  }
 
   async function run(mode) {
+    if (running) return;
+    setRunning(true);
     out.replaceChildren(el('p', { class: 'muted' }, 'Exécution…'));
-    previewBtn.disabled = true;
     try {
       const res = await api('POST', '/api/requests/' + encodeURIComponent(rid) + '/replay', { mode });
       out.replaceChildren(renderResult(res));
     } catch (e) {
-      out.replaceChildren(el('div', { class: 'error' }, errText(e)));
+      out.replaceChildren(el('div', { class: 'error' }, replayErrText(e)));
     } finally {
-      previewBtn.disabled = false;
+      setRunning(false);
     }
   }
   previewBtn.addEventListener('click', () => run('preview'));
@@ -522,7 +574,7 @@ async function renderRequest(id, rid) {
       r.body ? el('pre', {}, pretty(r.body)) : el('p', { class: 'muted' }, 'Vide.')),
     el('div', { class: 'card' },
       el('h2', {}, 'Rejouer'),
-      el('div', { class: 'row' }, previewBtn, replayBtn, confirmBox), out),
+      el('div', { class: 'row' }, previewBtn, replayBtn, confirmBox, pendingNote), out),
     el('div', { class: 'card' },
       el('h2', {}, 'Exécutions (' + r.executions.length + ')'),
       r.executions.length === 0 ? el('p', { class: 'muted' }, 'Aucune exécution.') :
