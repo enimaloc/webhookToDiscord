@@ -18,6 +18,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -115,9 +116,16 @@ class EntryProcessorTest extends PostgresTest {
         EntryProcessor a = processor(50);
         EntryProcessor b = processor(50);
         List<Long> ids = new ArrayList<>();
-        for (int i = 0; i < 10; i++) {
+        for (int i = 0; i < 5; i++) {
+            ids.add(insert(i));
+        }
+        a.trigger(endpointId);
+        // A now holds the lock and is mid-pipeline: every trigger below genuinely overlaps with it
+        assertThat(discord.firstRequest.await(10, TimeUnit.SECONDS)).isTrue();
+        for (int i = 5; i < 10; i++) {
             ids.add(insert(i));
             (i % 2 == 0 ? a : b).trigger(endpointId);
+            b.trigger(endpointId);
         }
 
         long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
@@ -127,5 +135,6 @@ class EntryProcessorTest extends PostgresTest {
         }
 
         assertThat(discord.contents).containsExactly("0", "1", "2", "3", "4", "5", "6", "7", "8", "9");
+        assertThat(discord.maxInFlight.get()).as("never two sends at once").isEqualTo(1);
     }
 }

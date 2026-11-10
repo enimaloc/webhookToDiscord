@@ -11,6 +11,7 @@ import org.jdbi.v3.core.Jdbi;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.sql.SQLException;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
@@ -29,6 +30,11 @@ public final class EntryProcessor {
     private final Pipeline pipeline;
     private final ExecutorService executor;
 
+    /**
+     * @param executor runs {@link #trigger triggered} drains. Each running drain holds one pooled connection for its
+     *                 advisory lock and borrows more for the pipeline (script, history, status), so the executor's
+     *                 parallelism must stay well below the database pool size or drains can starve each other.
+     */
     public EntryProcessor(Jdbi jdbi, EndpointRepository endpoints, HistoryRepository history, Pipeline pipeline,
                           ExecutorService executor) {
         this.jdbi = jdbi;
@@ -78,17 +84,37 @@ public final class EntryProcessor {
             Optional<IncomingRequest> next;
             while ((next = history.claimNextPending(h, endpointId)).isPresent()) {
                 IncomingRequest req = next.get();
-                Optional<Endpoint> endpoint = endpoints.find(endpointId);
-                if (endpoint.isEmpty()) {
-                    // entry deleted: its requests are removed by cascade
-                    return Drain.ENTRY_GONE;
+                try {
+                    Optional<Endpoint> endpoint = endpoints.find(endpointId);
+                    if (endpoint.isEmpty()) {
+                        // entry deleted: its requests are removed by cascade
+                        return Drain.ENTRY_GONE;
+                    }
+                    process(req, endpoint.get());
+                } catch (RuntimeException e) {
+                    LOG.error("Request {} of entry {} left in processing state", req.id(), endpointId, e);
+                    throw e;
                 }
-                process(req, endpoint.get());
             }
             return Drain.DONE;
         } finally {
+            unlock(h, endpointId);
+        }
+    }
+
+    /** Never throws: if the unlock fails the connection is aborted so a locked session never returns to the pool. */
+    private static void unlock(Handle h, String endpointId) {
+        try {
             h.select("SELECT pg_advisory_unlock(?, hashtext(?))", LOCK_NAMESPACE, endpointId)
                     .mapTo(Boolean.class).one();
+        } catch (RuntimeException e) {
+            LOG.error("Could not release advisory lock of entry {}; discarding connection", endpointId, e);
+            try {
+                // closing the physical session releases its advisory locks server-side; the pool evicts it on next use
+                h.getConnection().abort(Runnable::run);
+            } catch (SQLException | RuntimeException abortError) {
+                LOG.error("Could not abort connection holding the lock of entry {}", endpointId, abortError);
+            }
         }
     }
 

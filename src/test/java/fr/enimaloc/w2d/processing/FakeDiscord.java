@@ -8,6 +8,8 @@ import io.javalin.Javalin;
 import java.net.http.HttpClient;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /** Local stand-in for Discord: records the {@code content} of every message posted to webhook 1. */
 final class FakeDiscord implements AutoCloseable {
@@ -15,14 +17,23 @@ final class FakeDiscord implements AutoCloseable {
     static final String URL = "https://discord.com/api/webhooks/1/" + TOKEN;
 
     final List<String> contents = new CopyOnWriteArrayList<>();
+    final CountDownLatch firstRequest = new CountDownLatch(1);
+    final AtomicInteger maxInFlight = new AtomicInteger();
+    private final AtomicInteger inFlight = new AtomicInteger();
     private final Javalin server;
 
     FakeDiscord(int status, long delayMs) {
         server = Javalin.create(cfg -> cfg.routes.post("/api/webhooks/1/" + TOKEN, ctx -> {
-            JsonNode body = Json.MAPPER.readTree(ctx.body());
-            contents.add(body.path("content").asText());
-            if (delayMs > 0) {
-                Thread.sleep(delayMs);
+            maxInFlight.accumulateAndGet(inFlight.incrementAndGet(), Math::max);
+            try {
+                JsonNode body = Json.MAPPER.readTree(ctx.body());
+                contents.add(body.path("content").asText());
+                firstRequest.countDown();
+                if (delayMs > 0) {
+                    Thread.sleep(delayMs);
+                }
+            } finally {
+                inFlight.decrementAndGet();
             }
             ctx.status(status);
             if (status >= 400) {

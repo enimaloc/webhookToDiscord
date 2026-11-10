@@ -59,7 +59,7 @@ public final class HistoryRepository {
     public Optional<IncomingRequest> claimNextPending(Handle h, String endpointId) {
         return h.createQuery("UPDATE requests SET status = 'processing' WHERE status = 'pending' AND id = ("
                         + "SELECT id FROM requests WHERE endpoint_id = :endpoint AND status = 'pending' "
-                        + "ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING " + REQ_COLUMNS)
+                        + "ORDER BY id LIMIT 1 FOR UPDATE) RETURNING " + REQ_COLUMNS)
                 .bind("endpoint", endpointId).map(HistoryRepository::mapRequest).findOne();
     }
 
