@@ -21,13 +21,17 @@ public class DiscordSender {
     private static final int MAX_RETRIES = 3;
     private static final int MAX_RESPONSE = 2048;
     private static final Duration DEFAULT_429_WAIT = Duration.ofSeconds(1);
+    private static final Duration MAX_429_WAIT = Duration.ofSeconds(60);
+    private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(10);
+    private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(30);
 
     private final HttpClient client;
     private final Sleeper sleeper;
     private final UnaryOperator<String> urlRewriter;
+    private final Duration requestTimeout;
 
     public DiscordSender() {
-        this(HttpClient.newHttpClient(), d -> Thread.sleep(d));
+        this(HttpClient.newBuilder().connectTimeout(CONNECT_TIMEOUT).build(), d -> Thread.sleep(d));
     }
 
     public DiscordSender(HttpClient client, Sleeper sleeper) {
@@ -35,6 +39,11 @@ public class DiscordSender {
     }
 
     public DiscordSender(HttpClient client, Sleeper sleeper, UnaryOperator<String> urlRewriter) {
+        this(client, sleeper, urlRewriter, REQUEST_TIMEOUT);
+    }
+
+    DiscordSender(HttpClient client, Sleeper sleeper, UnaryOperator<String> urlRewriter, Duration requestTimeout) {
+        this.requestTimeout = requestTimeout;
         this.client = client;
         this.sleeper = sleeper;
         this.urlRewriter = urlRewriter;
@@ -52,14 +61,17 @@ public class DiscordSender {
         String masked = DiscordUrls.mask(m.url());
         String body;
         HttpRequest request;
+        String rewritten = m.url();
         try {
             body = Json.MAPPER.writeValueAsString(m.message());
-            request = HttpRequest.newBuilder(URI.create(urlRewriter.apply(m.url())))
+            rewritten = urlRewriter.apply(m.url());
+            request = HttpRequest.newBuilder(URI.create(rewritten))
+                    .timeout(requestTimeout)
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body))
                     .build();
         } catch (Exception e) {
-            return new SendResult(masked, 0, 0, truncate(String.valueOf(e.getMessage())), false);
+            return new SendResult(masked, 0, 0, describe(e, m.url(), rewritten), false);
         }
 
         int attempts = 0;
@@ -76,7 +88,7 @@ public class DiscordSender {
                     return new SendResult(masked, status, attempts, response, true);
                 }
                 if (status == 429) {
-                    wait = retryAfter(r);
+                    wait = clamp(retryAfter(r));
                 } else if (status >= 500) {
                     wait = backoff(attempts);
                 } else {
@@ -84,7 +96,7 @@ public class DiscordSender {
                 }
             } catch (IOException e) {
                 status = 0;
-                response = truncate(e.getClass().getSimpleName() + ": " + e.getMessage());
+                response = describe(e, m.url(), rewritten);
                 wait = backoff(attempts);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -100,6 +112,37 @@ public class DiscordSender {
                 return new SendResult(masked, status, attempts, response, false);
             }
         }
+    }
+
+    /** Exception summary with the webhook URL and token scrubbed. */
+    private static String describe(Exception e, String url, String rewritten) {
+        String msg = String.valueOf(e.getMessage());
+        String masked = DiscordUrls.mask(url);
+        for (String u : new String[] {url, rewritten}) {
+            if (u != null && !u.isEmpty()) {
+                msg = msg.replace(u, masked);
+            }
+        }
+        String token = token(url);
+        if (token != null && !token.isEmpty()) {
+            msg = msg.replace(token, "***");
+        }
+        return truncate(e.getClass().getSimpleName() + ": " + msg);
+    }
+
+    private static String token(String url) {
+        if (url == null) {
+            return null;
+        }
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("/webhooks/\\d+/([^/?#]+)").matcher(url);
+        return m.find() ? m.group(1) : null;
+    }
+
+    private static Duration clamp(Duration d) {
+        if (d.isNegative()) {
+            return Duration.ZERO;
+        }
+        return d.compareTo(MAX_429_WAIT) > 0 ? MAX_429_WAIT : d;
     }
 
     private static Duration backoff(int attempt) {

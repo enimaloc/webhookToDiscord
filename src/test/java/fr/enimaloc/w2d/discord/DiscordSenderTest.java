@@ -103,6 +103,75 @@ class DiscordSenderTest {
     @Test
     void sendAllKeepsOrder() {
         DiscordSender s = sender(n -> new Reply(204, null));
-        assertThat(s.sendAll(List.of(msg(), msg()))).hasSize(2);
+        List<SendResult> rs = s.sendAll(List.of(msg("a"), msg("b"), msg("c")));
+        assertThat(rs).hasSize(3);
+        assertThat(bodies).containsExactly("{\"content\":\"a\"}", "{\"content\":\"b\"}", "{\"content\":\"c\"}");
+    }
+
+    private OutgoingMessage msg(String content) {
+        return new OutgoingMessage(URL, Json.MAPPER.createObjectNode().put("content", content));
+    }
+
+    @Test
+    void clampsNegativeRetryAfter() {
+        DiscordSender s = sender(n -> n == 1 ? new Reply(429, "{\"retry_after\":-5}") : new Reply(204, null));
+        assertThat(s.send(msg()).ok()).isTrue();
+        assertThat(sleeps).containsExactly(Duration.ZERO);
+    }
+
+    @Test
+    void clampsHugeRetryAfter() {
+        DiscordSender s = sender(n -> n == 1 ? new Reply(429, "{\"retry_after\":9999}") : new Reply(204, null));
+        assertThat(s.send(msg()).ok()).isTrue();
+        assertThat(sleeps).containsExactly(Duration.ofSeconds(60));
+    }
+
+    @Test
+    void timesOutAndRetries() {
+        server = Javalin.create(cfg -> cfg.routes.post("/api/webhooks/1/" + TOKEN, ctx -> {
+            calls.incrementAndGet();
+            try {
+                Thread.sleep(600);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+            ctx.status(204);
+        }));
+        server.start(0);
+        String base = "http://localhost:" + server.port();
+        DiscordSender s = new DiscordSender(HttpClient.newHttpClient(), sleeps::add,
+                u -> u.replace("https://discord.com", base), Duration.ofMillis(100));
+        SendResult r = s.send(msg());
+        assertThat(r.ok()).isFalse();
+        assertThat(r.status()).isEqualTo(0);
+        assertThat(r.attempts()).isEqualTo(4);
+        assertThat(r.response()).doesNotContain(TOKEN);
+    }
+
+    @Test
+    void retriesOnNetworkError() throws Exception {
+        int port;
+        try (java.net.ServerSocket ss = new java.net.ServerSocket(0)) {
+            port = ss.getLocalPort();
+        }
+        DiscordSender s = new DiscordSender(HttpClient.newHttpClient(), sleeps::add,
+                u -> u.replace("https://discord.com", "http://localhost:" + port));
+        SendResult r = s.send(msg());
+        assertThat(r.ok()).isFalse();
+        assertThat(r.status()).isEqualTo(0);
+        assertThat(r.attempts()).isEqualTo(4);
+        assertThat(sleeps).hasSize(3);
+        assertThat(r.response()).doesNotContain(TOKEN);
+    }
+
+    @Test
+    void invalidUriDoesNotLeakToken() {
+        String bad = "https://discord.com/api/webhooks/1/" + TOKEN + "?a=b c";
+        assertThat(DiscordUrls.isValid(bad)).isTrue();
+        DiscordSender s = new DiscordSender(HttpClient.newHttpClient(), sleeps::add);
+        SendResult r = s.send(new OutgoingMessage(bad, Json.MAPPER.createObjectNode().put("content", "x")));
+        assertThat(r.ok()).isFalse();
+        assertThat(r.response()).doesNotContain(TOKEN);
+        assertThat(r.url()).doesNotContain(TOKEN);
     }
 }
