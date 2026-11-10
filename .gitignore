@@ -46,3 +46,4 @@ bin/
 docs/superpowers/
 .superpowers/
 .claude/
+.playwright-mcp/

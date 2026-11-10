@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webhook-to-discord
+  labels:
+    app: webhook-to-discord
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: webhook-to-discord
+  template:
+    metadata:
+      labels:
+        app: webhook-to-discord
+    spec:
+      containers:
+        - name: webhook-to-discord
+          image: ghcr.io/OWNER/webhooktodiscord:latest # remplacer OWNER et épingler une version
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: webhook-to-discord, key: DATABASE_URL } }
+            - name: DB_USER
+              valueFrom: { secretKeyRef: { name: webhook-to-discord, key: DB_USER } }
+            - name: DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: webhook-to-discord, key: DB_PASSWORD } }
+            - name: ADMIN_PASSWORD
+              valueFrom: { secretKeyRef: { name: webhook-to-discord, key: ADMIN_PASSWORD } }
+            # OBLIGATOIRE avec plusieurs replicas : sans lui, chaque pod génère un secret aléatoire
+            # (sessions non partagées entre pods ni conservées après redémarrage). Même valeur sur tous les pods.
+            - name: SESSION_SECRET
+              valueFrom: { secretKeyRef: { name: webhook-to-discord, key: SESSION_SECRET } }
+            - name: PUBLIC_BASE_URL
+              value: https://webhooks.example.com
+          readinessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests: { memory: 512Mi }
+            limits: { memory: 1Gi }

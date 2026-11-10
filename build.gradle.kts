@@ -18,7 +18,7 @@ java {
 
 application {
     mainClass = "fr.enimaloc.w2d.App"
-    applicationDefaultJvmArgs = listOf("-Dpolyglot.engine.WarnInterpreterOnly=false", "--sun-misc-unsafe-memory-access=allow")
+    applicationDefaultJvmArgs = listOf("-Dpolyglot.engine.WarnInterpreterOnly=false", "--sun-misc-unsafe-memory-access=allow", "--enable-native-access=ALL-UNNAMED")
 }
 
 dependencies {
@@ -46,5 +46,5 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
-    jvmArgs("-Dpolyglot.engine.WarnInterpreterOnly=false", "--sun-misc-unsafe-memory-access=allow")
+    jvmArgs("-Dpolyglot.engine.WarnInterpreterOnly=false", "--sun-misc-unsafe-memory-access=allow", "--enable-native-access=ALL-UNNAMED")
 }

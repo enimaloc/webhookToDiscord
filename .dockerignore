@@ -1,0 +1,9 @@
+build/
+.gradle/
+.idea/
+docs/
+.superpowers/
+.claude/
+.playwright-mcp/
+k8s/
+.git/
