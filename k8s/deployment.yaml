@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webhook-to-discord
+  labels:
+    app: webhook-to-discord
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: webhook-to-discord
+  template:
+    metadata:
+      labels:
+        app: webhook-to-discord
+    spec:
+      containers:
+        - name: webhook-to-discord
+          image: ghcr.io/OWNER/webhooktodiscord:0.1.0 # remplacer OWNER ; version épinglée
+          ports:
+            - containerPort: 8080
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
+          env:
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: webhook-to-discord, key: DATABASE_URL } }
+            - name: DB_USER
+              valueFrom: { secretKeyRef: { name: webhook-to-discord, key: DB_USER } }
+            - name: DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: webhook-to-discord, key: DB_PASSWORD } }
+            - name: ADMIN_PASSWORD
+              valueFrom: { secretKeyRef: { name: webhook-to-discord, key: ADMIN_PASSWORD } }
+            # OBLIGATOIRE avec plusieurs replicas : sans lui, chaque pod génère un secret aléatoire
+            # (sessions non partagées entre pods ni conservées après redémarrage). Même valeur sur tous les pods.
+            - name: SESSION_SECRET
+              valueFrom: { secretKeyRef: { name: webhook-to-discord, key: SESSION_SECRET } }
+            - name: PUBLIC_BASE_URL
+              value: https://webhooks.example.com
+            # lu par le script de démarrage (bin/webhookToDiscord) en plus des options JVM par défaut
+            - name: JAVA_OPTS
+              value: -XX:MaxRAMPercentage=60
+          # démarrage (migrations Flyway, GraalJS) : jusqu'à 3 min avant que les autres sondes prennent le relais
+          startupProbe:
+            httpGet: { path: /health, port: 8080 }
+            periodSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests: { memory: 512Mi }
+            limits: { memory: 1Gi }
