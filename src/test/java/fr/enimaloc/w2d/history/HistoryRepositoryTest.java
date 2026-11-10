@@ -89,4 +89,15 @@ class HistoryRepositoryTest extends PostgresTest {
         assertThat(repo.findRequest(old)).isEqualTo(Optional.empty());
         assertThat(repo.findRequest(recent)).isPresent();
     }
+
+    @Test
+    void claimPendingOnlyOnce() {
+        long id = insert();
+        assertThat(repo.claimPending(id)).isTrue();
+        assertThat(repo.findRequest(id).orElseThrow().status()).isEqualTo(RequestStatus.PROCESSING);
+        assertThat(repo.claimPending(id)).isFalse();
+        repo.setStatus(id, RequestStatus.FAILED);
+        assertThat(repo.claimPending(id)).isFalse();
+        assertThat(repo.findRequest(id).orElseThrow().status()).isEqualTo(RequestStatus.FAILED);
+    }
 }

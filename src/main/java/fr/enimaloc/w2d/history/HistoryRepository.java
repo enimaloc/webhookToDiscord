@@ -63,6 +63,13 @@ public final class HistoryRepository {
                 .bind("endpoint", endpointId).map(HistoryRepository::mapRequest).findOne();
     }
 
+    /** Moves the request from pending to processing; false if it was not pending (e.g. a drain claimed it). */
+    public boolean claimPending(long requestId) {
+        return jdbi.withHandle(h -> h.createUpdate(
+                        "UPDATE requests SET status = 'processing' WHERE id = :id AND status = 'pending'")
+                .bind("id", requestId).execute()) == 1;
+    }
+
     public boolean hasPending(String endpointId) {
         return jdbi.withHandle(h -> h.createQuery(
                         "SELECT EXISTS (SELECT 1 FROM requests WHERE endpoint_id = :endpoint AND status = 'pending')")

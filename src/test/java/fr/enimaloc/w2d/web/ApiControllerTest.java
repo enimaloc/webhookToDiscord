@@ -400,4 +400,69 @@ class ApiControllerTest extends PostgresTest {
             assertThat(discord.contents).isEmpty();
         });
     }
+
+    @Test
+    void replaySendOnPendingClaimsTheRequest() {
+        Endpoint e = endpoints.create("e");
+        endpoints.update(new Endpoint(e.id(), e.name(), true, script("saved"), e.auth(), e.createdAt(),
+                e.updatedAt()));
+        long rid = storedRequest(e.id());
+        JavalinTest.test(app(), (server, client) -> {
+            String cookie = login(server);
+            var r = send(server, "POST", "/api/requests/" + rid + "/replay", "{\"mode\":\"send\"}", cookie);
+            assertThat(r.statusCode()).isEqualTo(200);
+            assertThat(json(r).get("status").asText()).isEqualTo("success");
+            assertThat(discord.contents).containsExactly("saved");
+            // no longer pending: a later drain cannot deliver it a second time
+            assertThat(history.findRequest(rid).orElseThrow().status()).isEqualTo(RequestStatus.DONE);
+            assertThat(history.hasPending(e.id())).isFalse();
+        });
+    }
+
+    @Test
+    void replaySendOnPendingScriptErrorMarksFailed() {
+        Endpoint e = endpoints.create("e");
+        long rid = storedRequest(e.id());
+        JavalinTest.test(app(), (server, client) -> {
+            String cookie = login(server);
+            String body = "{\"mode\":\"send\",\"script\":\"function handle(q){ throw new Error('boom'); }\"}";
+            var r = send(server, "POST", "/api/requests/" + rid + "/replay", body, cookie);
+            assertThat(r.statusCode()).isEqualTo(200);
+            assertThat(history.findRequest(rid).orElseThrow().status()).isEqualTo(RequestStatus.FAILED);
+        });
+    }
+
+    @Test
+    void replaySendOnPendingClaimedByDrainIs409() {
+        Endpoint e = endpoints.create("e");
+        endpoints.update(new Endpoint(e.id(), e.name(), true, script("saved"), e.auth(), e.createdAt(),
+                e.updatedAt()));
+        long rid = storedRequest(e.id());
+        // simulates a drain claiming the row between the read and the claim: the claim updates no row
+        jdbi().useHandle(h -> {
+            h.execute("CREATE FUNCTION test_block_claim() RETURNS trigger LANGUAGE plpgsql AS "
+                    + "$$ BEGIN RETURN NULL; END $$");
+            h.execute("CREATE TRIGGER test_block_claim BEFORE UPDATE ON requests FOR EACH ROW "
+                    + "WHEN (NEW.status = 'processing') EXECUTE FUNCTION test_block_claim()");
+        });
+        try {
+            JavalinTest.test(app(), (server, client) -> {
+                String cookie = login(server);
+                var r = send(server, "POST", "/api/requests/" + rid + "/replay", "{\"mode\":\"send\"}", cookie);
+                assertThat(r.statusCode()).isEqualTo(409);
+                assertThat(json(r).get("error").asText()).isEqualTo("request is being processed");
+                assertThat(discord.contents).isEmpty();
+                assertThat(history.executionsOf(rid)).isEmpty();
+
+                // preview never claims and stays allowed
+                var p = send(server, "POST", "/api/requests/" + rid + "/replay", "{\"mode\":\"preview\"}", cookie);
+                assertThat(p.statusCode()).isEqualTo(200);
+            });
+        } finally {
+            jdbi().useHandle(h -> {
+                h.execute("DROP TRIGGER test_block_claim ON requests");
+                h.execute("DROP FUNCTION test_block_claim()");
+            });
+        }
+    }
 }

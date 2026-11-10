@@ -192,8 +192,27 @@ public final class ApiController {
         // an inline script is an unsaved editor preview: it is never written back to the entry
         String script = scriptNode != null && scriptNode.isTextual() ? scriptNode.asText() : e.script();
 
-        PipelineOutcome outcome = pipeline.execute(r, script, mode);
-        if (mode == Execution.Mode.REPLAY && outcome.status() == Execution.Status.SUCCESS
+        // a pending request is owned by the drain: take it over atomically or it would be delivered twice
+        boolean claimed = false;
+        if (mode == Execution.Mode.REPLAY && r.status() == RequestStatus.PENDING) {
+            if (!history.claimPending(r.id())) {
+                throw new ApiException(HttpStatus.CONFLICT, "request is being processed");
+            }
+            claimed = true;
+        }
+        PipelineOutcome outcome;
+        try {
+            outcome = pipeline.execute(r, script, mode);
+        } catch (RuntimeException ex) {
+            if (claimed) {
+                history.setStatus(r.id(), RequestStatus.FAILED);
+            }
+            throw ex;
+        }
+        boolean success = outcome.status() == Execution.Status.SUCCESS;
+        if (claimed) {
+            history.setStatus(r.id(), success ? RequestStatus.DONE : RequestStatus.FAILED);
+        } else if (mode == Execution.Mode.REPLAY && success
                 && (r.status() == RequestStatus.FAILED || r.status() == RequestStatus.PROCESSING)) {
             history.setStatus(r.id(), RequestStatus.DONE);
         }
