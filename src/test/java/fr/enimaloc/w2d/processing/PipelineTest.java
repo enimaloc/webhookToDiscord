@@ -1,5 +1,6 @@
 package fr.enimaloc.w2d.processing;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import fr.enimaloc.w2d.endpoint.EndpointRepository;
 import fr.enimaloc.w2d.history.Execution;
 import fr.enimaloc.w2d.history.HistoryRepository;
@@ -116,5 +117,33 @@ class PipelineTest extends PostgresTest {
         Execution exec = history.executionsOf(req.id()).get(0);
         assertThat(exec.status()).isEqualTo(Execution.Status.SCRIPT_ERROR);
         assertThat(exec.error()).contains("nope");
+    }
+
+    @Test
+    void nulCharactersAreStoredReplaced() {
+        Pipeline p = pipeline(204);
+        long rid = history.insertPending(endpointId, "POST", Map.of(), "",
+                new byte[]{'a', 0, 'b'}, Set.of());
+        IncomingRequest req = history.findRequest(rid).orElseThrow();
+        String script = """
+                function handle(r) {
+                  console.log(r.body);
+                  var o = {};
+                  o[r.body] = r.body;
+                  return [{ url: "%s", message: { content: r.body, embeds: [o] } }];
+                }
+                """.formatted(FakeDiscord.URL);
+        PipelineOutcome out = p.execute(req, script, Execution.Mode.NORMAL);
+
+        assertThat(out.status()).isEqualTo(Execution.Status.SUCCESS);
+        assertThat(discord.contents).containsExactly("a\u0000b");
+        assertThat(out.script().logs()).contains("a\uFFFDb").doesNotContain("\u0000");
+        Execution exec = history.executionsOf(req.id()).get(0);
+        assertThat(exec.id()).isEqualTo(out.executionId());
+        assertThat(exec.status()).isEqualTo(Execution.Status.SUCCESS);
+        assertThat(exec.logs()).contains("a\uFFFDb").doesNotContain("\u0000");
+        JsonNode message = exec.messages().get(0).get("message");
+        assertThat(message.get("content").asText()).isEqualTo("a\uFFFDb");
+        assertThat(message.get("embeds").get(0).get("a\uFFFDb").asText()).isEqualTo("a\uFFFDb");
     }
 }
