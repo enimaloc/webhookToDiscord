@@ -26,7 +26,7 @@ public record AppConfig(
     public static AppConfig fromEnv(Map<String, String> env) {
         String adminPassword = required(env, "ADMIN_PASSWORD");
         String databaseUrl = required(env, "DATABASE_URL");
-        int port = Integer.parseInt(env.getOrDefault("PORT", "8080"));
+        int port = (int) number(env, "PORT", 8080, 1, 65535);
         String secret = env.get("SESSION_SECRET");
         byte[] sessionSecret;
         if (secret != null && !secret.isBlank()) {
@@ -44,11 +44,31 @@ public record AppConfig(
                 env.get("DB_PASSWORD"),
                 adminPassword,
                 env.getOrDefault("PUBLIC_BASE_URL", "http://localhost:" + port),
-                Duration.ofMillis(Long.parseLong(env.getOrDefault("SCRIPT_TIMEOUT_MS", "5000"))),
-                Integer.parseInt(env.getOrDefault("HISTORY_RETENTION_DAYS", "30")),
+                Duration.ofMillis(number(env, "SCRIPT_TIMEOUT_MS", 5000, 1, Long.MAX_VALUE)),
+                (int) number(env, "HISTORY_RETENTION_DAYS", 30, 1, Integer.MAX_VALUE),
                 port,
-                Long.parseLong(env.getOrDefault("MAX_BODY_BYTES", "1048576")),
+                number(env, "MAX_BODY_BYTES", 1_048_576, 1, Long.MAX_VALUE),
                 sessionSecret);
+    }
+
+    /** Parses an optional integer variable; blank means unset. */
+    private static long number(Map<String, String> env, String key, long fallback, long min, long max) {
+        String value = env.get(key);
+        if (value == null || value.isBlank()) {
+            return fallback;
+        }
+        long parsed;
+        try {
+            parsed = Long.parseLong(value.strip());
+        } catch (NumberFormatException e) {
+            throw new IllegalStateException("Environment variable " + key + " must be an integer, got: " + value);
+        }
+        if (parsed < min || parsed > max) {
+            String range = max == Long.MAX_VALUE || max == Integer.MAX_VALUE ? ">= " + min
+                    : "between " + min + " and " + max;
+            throw new IllegalStateException("Environment variable " + key + " must be " + range + ", got: " + parsed);
+        }
+        return parsed;
     }
 
     private static String required(Map<String, String> env, String key) {
@@ -59,4 +79,13 @@ public record AppConfig(
         return value;
     }
 
+    /** Never prints secrets (passwords, session secret). */
+    @Override
+    public String toString() {
+        return "AppConfig[databaseUrl=" + databaseUrl + ", dbUser=" + dbUser
+                + ", dbPassword=" + (dbPassword == null ? null : "***")
+                + ", adminPassword=***, publicBaseUrl=" + publicBaseUrl + ", scriptTimeout=" + scriptTimeout
+                + ", retentionDays=" + retentionDays + ", port=" + port + ", maxBodyBytes=" + maxBodyBytes
+                + ", sessionSecret=***]";
+    }
 }
