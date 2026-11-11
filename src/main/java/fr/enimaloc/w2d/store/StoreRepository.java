@@ -9,6 +9,9 @@ import java.util.Map;
 
 /** Per-entry key/value memory kept between script runs (e.g. Discord message ids to edit later). */
 public final class StoreRepository {
+    /** Keys kept per entry; the least recently written ones are evicted beyond it (keys are payload-driven). */
+    public static final int MAX_KEYS = 1000;
+
     private final Jdbi jdbi;
 
     public StoreRepository(Jdbi jdbi) {
@@ -25,9 +28,14 @@ public final class StoreRepository {
     }
 
     public void put(String endpointId, String key, String value) {
-        jdbi.useHandle(h -> h.createUpdate("INSERT INTO store (endpoint_id, key, value) VALUES (:endpoint, :key, :value) "
-                        + "ON CONFLICT (endpoint_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()")
-                .bind("endpoint", endpointId).bind("key", key).bind("value", value).execute());
+        jdbi.useTransaction(h -> {
+            h.createUpdate("INSERT INTO store (endpoint_id, key, value) VALUES (:endpoint, :key, :value) "
+                            + "ON CONFLICT (endpoint_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()")
+                    .bind("endpoint", endpointId).bind("key", key).bind("value", value).execute();
+            h.createUpdate("DELETE FROM store WHERE endpoint_id = :endpoint AND key IN (SELECT key FROM store "
+                            + "WHERE endpoint_id = :endpoint ORDER BY updated_at DESC, key OFFSET :max)")
+                    .bind("endpoint", endpointId).bind("max", MAX_KEYS).execute();
+        });
     }
 
     public boolean remove(String endpointId, String key) {
