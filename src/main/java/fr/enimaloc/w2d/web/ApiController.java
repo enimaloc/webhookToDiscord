@@ -4,7 +4,6 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import fr.enimaloc.w2d.discord.DiscordUrls;
 import fr.enimaloc.w2d.endpoint.AuthConfig;
 import fr.enimaloc.w2d.endpoint.Endpoint;
 import fr.enimaloc.w2d.endpoint.EndpointRepository;
@@ -224,8 +223,7 @@ public final class ApiController {
                 .put("error", error(outcome));
         ArrayNode messages = out.putArray("messages");
         for (OutgoingMessage m : outcome.script().messages()) {
-            messages.addObject().put("method", m.method()).put("url", DiscordUrls.mask(m.url()))
-                    .set("message", m.message());
+            messages.add(Pipeline.describe(m));
         }
         out.set("sends", Json.MAPPER.valueToTree(outcome.sends()));
         json(ctx, HttpStatus.OK, out);

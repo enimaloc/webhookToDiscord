@@ -10,6 +10,7 @@ import fr.enimaloc.w2d.history.RetentionJob;
 import fr.enimaloc.w2d.processing.EntryProcessor;
 import fr.enimaloc.w2d.processing.Pipeline;
 import fr.enimaloc.w2d.script.ScriptRunner;
+import fr.enimaloc.w2d.store.StoreRepository;
 import fr.enimaloc.w2d.web.AdminAuth;
 import fr.enimaloc.w2d.web.ApiController;
 import fr.enimaloc.w2d.web.SessionTokens;
@@ -85,7 +86,8 @@ public final class App {
         EndpointRepository endpoints = new EndpointRepository(db.jdbi());
         HistoryRepository history = new HistoryRepository(db.jdbi());
         ScriptRunner runner = new ScriptRunner(config.scriptTimeout());
-        Pipeline pipeline = new Pipeline(endpoints, history, runner, new DiscordSender());
+        StoreRepository store = new StoreRepository(db.jdbi());
+        Pipeline pipeline = new Pipeline(endpoints, history, runner, new DiscordSender(), store);
         // processor threads must stay well below the DB pool size (Hikari default 10)
         AtomicInteger threadNo = new AtomicInteger();
         ExecutorService executor = Executors.newFixedThreadPool(4, r -> {
@@ -94,7 +96,7 @@ public final class App {
             return t;
         });
         EntryProcessor processor = new EntryProcessor(db.jdbi(), endpoints, history, pipeline, executor);
-        RetentionJob retention = new RetentionJob(history, config.retentionDays());
+        RetentionJob retention = new RetentionJob(history, store, config.retentionDays());
         retention.start();
 
         // picks up requests whose trigger was lost (e.g. scheduling failure, pod killed before draining)

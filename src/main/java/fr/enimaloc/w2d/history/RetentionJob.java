@@ -1,5 +1,7 @@
 package fr.enimaloc.w2d.history;
 
+import fr.enimaloc.w2d.store.StoreRepository;
+
 import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.Executors;
@@ -8,11 +10,14 @@ import java.util.concurrent.TimeUnit;
 
 public final class RetentionJob {
     private final HistoryRepository history;
+    private final StoreRepository store;
     private final int retentionDays;
     private ScheduledExecutorService scheduler;
 
-    public RetentionJob(HistoryRepository history, int retentionDays) {
+    /** {@code store} may be null; when set, keys not written within the retention period are purged too. */
+    public RetentionJob(HistoryRepository history, StoreRepository store, int retentionDays) {
         this.history = history;
+        this.store = store;
         this.retentionDays = retentionDays;
     }
 
@@ -42,7 +47,12 @@ public final class RetentionJob {
         }
     }
 
+    /** Returns the number of purged requests. */
     public int runOnce(Instant now) {
-        return history.purgeOlderThan(now.minus(Duration.ofDays(retentionDays)));
+        Instant cutoff = now.minus(Duration.ofDays(retentionDays));
+        if (store != null) {
+            store.purgeOlderThan(cutoff);
+        }
+        return history.purgeOlderThan(cutoff);
     }
 }

@@ -463,7 +463,8 @@ function renderMessages(messages) {
   const list = Array.isArray(messages) ? messages : [messages];
   return el('div', {}, el('strong', {}, 'Messages (' + list.length + ')'),
     list.map((m) => el('div', {},
-      m && m.url ? el('div', { class: 'small muted' }, (m.method || 'POST') + ' ' + m.url) : null,
+      m && m.url ? el('div', { class: 'small muted' }, (m.method || 'POST') + ' ' + m.url
+        + (m.saveId ? ' → saveId: ' + m.saveId : '') + (m.forget ? ' → forget: ' + m.forget : '')) : null,
       m && m.message === null ? null
         : el('pre', {}, JSON.stringify(m && m.message !== undefined ? m.message : m, null, 2)))));
 }

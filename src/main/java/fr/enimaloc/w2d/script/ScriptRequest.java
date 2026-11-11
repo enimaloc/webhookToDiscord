@@ -17,19 +17,25 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+/** What {@code handle(request)} receives; {@code store} is the entry's memory (see {@code StoreRepository}). */
 public record ScriptRequest(String method, Map<String, List<String>> headers, Map<String, List<String>> query,
-                            String body, JsonNode json) {
+                            String body, JsonNode json, Map<String, String> store) {
 
     private static final ObjectReader STRICT_READER =
             Json.MAPPER.reader().with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
 
     public static ScriptRequest from(IncomingRequest in) {
+        return from(in, Map.of());
+    }
+
+    public static ScriptRequest from(IncomingRequest in, Map<String, String> store) {
         String body = decodeUtf8(in.body());
         return new ScriptRequest(in.method(),
                 in.headers() == null ? Map.of() : in.headers(),
                 parseQuery(in.query()),
                 body,
-                parseJson(body));
+                parseJson(body),
+                store == null ? Map.of() : store);
     }
 
     private static String decodeUtf8(byte[] bytes) {
