@@ -40,4 +40,18 @@ class StoreRepositoryTest extends PostgresTest {
         assertThat(store.purgeOlderThan(Instant.now().minusSeconds(30L * 24 * 3600))).isEqualTo(1);
         assertThat(store.all(a)).containsExactly(Map.entry("fresh", "2"));
     }
+
+    @Test
+    void oldestKeysAreEvictedBeyondTheCap() {
+        String a = new EndpointRepository(db.jdbi()).create("a").id();
+        StoreRepository store = new StoreRepository(db.jdbi());
+        db.jdbi().useHandle(h -> h.execute("INSERT INTO store (endpoint_id, key, value, updated_at) "
+                + "SELECT ?, 'k' || i, 'v', now() - i * interval '1 second' FROM generate_series(1, ?) i",
+                a, StoreRepository.MAX_KEYS));
+        store.put(a, "new", "1");
+
+        Map<String, String> all = store.all(a);
+        assertThat(all).hasSize(StoreRepository.MAX_KEYS).containsEntry("new", "1")
+                .doesNotContainKey("k" + StoreRepository.MAX_KEYS).containsKey("k1");
+    }
 }
