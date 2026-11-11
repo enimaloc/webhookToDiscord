@@ -4,7 +4,7 @@ Relais de webhooks générique : `POST /webhook/<id>` exécute un script JavaScr
 
 ## Contrat du script
 
-Le script définit une fonction `handle(request)` qui retourne un tableau `[{url, message}]` :
+Le script définit une fonction `handle(request)` qui retourne un tableau `[{url, message, method?}]` :
 
 ```js
 function handle(request) {
@@ -16,6 +16,8 @@ function handle(request) {
 ```
 
 - `url` : URL de webhook Discord valide ; `message` : charge utile Discord (`content`, `embeds`, ...).
+- `method` (optionnel, `POST` par défaut) : `POST` crée un message, `PATCH` le modifie, `DELETE` le supprime (`message` ignoré). `PATCH` et `DELETE` exigent une URL `.../webhooks/<id>/<token>/messages/<message_id>`, `POST` l'interdit.
+- Réponse : si Discord renvoie l'objet message (`POST` avec `?wait=true`, `PATCH`), il est enregistré dans l'historique (`sends[].message`, avec son `id`) ; sans `?wait=true`, Discord répond 204 sans corps.
 - `request` : `method`, `headers` et `query` (maps nom → liste de valeurs), `body` (texte UTF-8) et `json` (corps analysé, `null` si ce n'est pas du JSON).
 - Limites : 25 messages max par exécution, résultat de 1 Mo max, timeout `SCRIPT_TIMEOUT_MS`, 3 tentatives max par envoi Discord.
 

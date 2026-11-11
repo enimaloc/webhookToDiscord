@@ -18,6 +18,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -170,11 +171,27 @@ public final class ScriptRunner implements AutoCloseable {
             if (url == null || !url.isTextual() || !DiscordUrls.isValid(url.asText())) {
                 return ScriptResult.failure(logs, "messages[" + i + "].url is not a valid Discord webhook URL");
             }
+            JsonNode methodNode = item.get("method");
+            if (methodNode != null && !methodNode.isNull() && !methodNode.isTextual()) {
+                return ScriptResult.failure(logs, "messages[" + i + "].method must be a string");
+            }
+            String method = methodNode == null || methodNode.isNull()
+                    ? "POST" : methodNode.asText().toUpperCase(Locale.ROOT);
+            if (!OutgoingMessage.METHODS.contains(method)) {
+                return ScriptResult.failure(logs, "messages[" + i + "].method must be POST, PATCH or DELETE");
+            }
+            boolean targetsMessage = DiscordUrls.targetsMessage(url.asText());
+            if (method.equals("POST") == targetsMessage) {
+                return ScriptResult.failure(logs, "messages[" + i + "].url must " + (targetsMessage ? "not " : "")
+                        + "end with /messages/<id> for " + method);
+            }
             JsonNode message = item.get("message");
-            if (message == null || !message.isObject()) {
+            if (method.equals("DELETE")) {
+                message = null;
+            } else if (message == null || !message.isObject()) {
                 return ScriptResult.failure(logs, "messages[" + i + "].message must be an object");
             }
-            messages.add(new OutgoingMessage(url.asText(), message));
+            messages.add(new OutgoingMessage(method, url.asText(), message));
         }
         return ScriptResult.success(messages, logs);
     }

@@ -174,4 +174,65 @@ class DiscordSenderTest {
         assertThat(r.response()).doesNotContain(TOKEN);
         assertThat(r.url()).doesNotContain(TOKEN);
     }
+
+    private record Seen(String method, String query, String body, String contentType) {
+    }
+
+    private DiscordSender recordingSender(List<Seen> seen, int status, String reply) {
+        String path = "/api/webhooks/1/" + TOKEN;
+        server = Javalin.create(cfg -> {
+            cfg.routes.patch(path + "/messages/42", ctx -> {
+                seen.add(new Seen("PATCH", ctx.queryString(), ctx.body(), ctx.header("Content-Type")));
+                ctx.status(status).result(reply);
+            });
+            cfg.routes.delete(path + "/messages/42", ctx -> {
+                seen.add(new Seen("DELETE", ctx.queryString(), ctx.body(), ctx.header("Content-Type")));
+                ctx.status(204);
+            });
+            cfg.routes.post(path, ctx -> {
+                seen.add(new Seen("POST", ctx.queryString(), ctx.body(), ctx.header("Content-Type")));
+                ctx.status(status).result(reply);
+            });
+        });
+        server.start(0);
+        String base = "http://localhost:" + server.port();
+        return new DiscordSender(HttpClient.newHttpClient(), sleeps::add, u -> u.replace("https://discord.com", base));
+    }
+
+    @Test
+    void waitTrueReturnsTheMessageObject() {
+        List<Seen> seen = new CopyOnWriteArrayList<>();
+        DiscordSender s = recordingSender(seen, 200, "{\"id\":\"42\",\"content\":\"hi\"}");
+        SendResult r = s.send(new OutgoingMessage("POST", URL + "?wait=true",
+                Json.MAPPER.createObjectNode().put("content", "hi")));
+        assertThat(r.ok()).isTrue();
+        assertThat(r.method()).isEqualTo("POST");
+        assertThat(r.message().path("id").asText()).isEqualTo("42");
+        assertThat(seen.get(0).query()).isEqualTo("wait=true");
+    }
+
+    @Test
+    void patchSendsTheBodyWithPatch() {
+        List<Seen> seen = new CopyOnWriteArrayList<>();
+        DiscordSender s = recordingSender(seen, 200, "{\"id\":\"42\",\"content\":\"edited\"}");
+        SendResult r = s.send(new OutgoingMessage("PATCH", URL + "/messages/42",
+                Json.MAPPER.createObjectNode().put("content", "edited")));
+        assertThat(r.ok()).isTrue();
+        assertThat(seen).containsExactly(new Seen("PATCH", null, "{\"content\":\"edited\"}", "application/json"));
+        assertThat(r.message().path("content").asText()).isEqualTo("edited");
+        assertThat(r.url()).isEqualTo("https://discord.com/api/webhooks/1/***/messages/42");
+    }
+
+    @Test
+    void deleteSendsNoBody() {
+        List<Seen> seen = new CopyOnWriteArrayList<>();
+        DiscordSender s = recordingSender(seen, 200, "");
+        SendResult r = s.send(new OutgoingMessage("DELETE", URL + "/messages/42", null));
+        assertThat(r.ok()).isTrue();
+        assertThat(r.status()).isEqualTo(204);
+        assertThat(r.message()).isNull();
+        assertThat(seen.get(0).method()).isEqualTo("DELETE");
+        assertThat(seen.get(0).body()).isEmpty();
+        assertThat(seen.get(0).contentType()).isNull();
+    }
 }

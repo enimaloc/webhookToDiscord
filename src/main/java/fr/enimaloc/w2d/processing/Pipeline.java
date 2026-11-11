@@ -58,14 +58,14 @@ public final class Pipeline {
     static ScriptResult sanitize(ScriptResult r) {
         List<OutgoingMessage> messages = new ArrayList<>(r.messages().size());
         for (OutgoingMessage m : r.messages()) {
-            messages.add(new OutgoingMessage(stripNul(m.url()), stripNul(m.message())));
+            messages.add(new OutgoingMessage(m.method(), stripNul(m.url()), stripNul(m.message())));
         }
         return new ScriptResult(r.ok(), messages, stripNul(r.logs()), stripNul(r.error()));
     }
 
     private static List<SendResult> sanitizeSends(List<SendResult> sends) {
-        return sends.stream().map(s -> new SendResult(stripNul(s.url()), s.status(), s.attempts(),
-                stripNul(s.response()), s.ok())).toList();
+        return sends.stream().map(s -> new SendResult(s.method(), stripNul(s.url()), s.status(), s.attempts(),
+                stripNul(s.response()), stripNul(s.message()), s.ok())).toList();
     }
 
     static String stripNul(String s) {
@@ -97,7 +97,7 @@ public final class Pipeline {
     private static JsonNode maskedMessages(List<OutgoingMessage> messages) {
         ArrayNode out = Json.MAPPER.createArrayNode();
         for (OutgoingMessage m : messages) {
-            out.addObject().put("url", DiscordUrls.mask(m.url())).set("message", m.message());
+            out.addObject().put("method", m.method()).put("url", DiscordUrls.mask(m.url())).set("message", m.message());
         }
         return out;
     }

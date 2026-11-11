@@ -224,7 +224,8 @@ public final class ApiController {
                 .put("error", error(outcome));
         ArrayNode messages = out.putArray("messages");
         for (OutgoingMessage m : outcome.script().messages()) {
-            messages.addObject().put("url", DiscordUrls.mask(m.url())).set("message", m.message());
+            messages.addObject().put("method", m.method()).put("url", DiscordUrls.mask(m.url()))
+                    .set("message", m.message());
         }
         out.set("sends", Json.MAPPER.valueToTree(outcome.sends()));
         json(ctx, HttpStatus.OK, out);

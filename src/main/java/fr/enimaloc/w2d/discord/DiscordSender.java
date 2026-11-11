@@ -58,20 +58,22 @@ public class DiscordSender {
     }
 
     public SendResult send(OutgoingMessage m) {
+        String method = m.method();
         String masked = DiscordUrls.mask(m.url());
-        String body;
         HttpRequest request;
         String rewritten = m.url();
         try {
-            body = Json.MAPPER.writeValueAsString(m.message());
             rewritten = urlRewriter.apply(m.url());
-            request = HttpRequest.newBuilder(URI.create(rewritten))
-                    .timeout(requestTimeout)
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(body))
-                    .build();
+            HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(rewritten)).timeout(requestTimeout);
+            if (m.message() == null) {
+                builder.method(method, HttpRequest.BodyPublishers.noBody());
+            } else {
+                builder.header("Content-Type", "application/json")
+                        .method(method, HttpRequest.BodyPublishers.ofString(Json.MAPPER.writeValueAsString(m.message())));
+            }
+            request = builder.build();
         } catch (Exception e) {
-            return new SendResult(masked, 0, 0, describe(e, m.url(), rewritten), false);
+            return new SendResult(method, masked, 0, 0, describe(e, m.url(), rewritten), null, false);
         }
 
         int attempts = 0;
@@ -85,14 +87,16 @@ public class DiscordSender {
                 status = r.statusCode();
                 response = truncate(r.body());
                 if (status >= 200 && status < 300) {
-                    return new SendResult(masked, status, attempts, response, true);
+                    JsonNode message = messageObject(r.body());
+                    return new SendResult(method, masked, status, attempts, message == null ? response : "", message,
+                            true);
                 }
                 if (status == 429) {
                     wait = clamp(retryAfter(r));
                 } else if (status >= 500) {
                     wait = backoff(attempts);
                 } else {
-                    return new SendResult(masked, status, attempts, response, false);
+                    return new SendResult(method, masked, status, attempts, response, null, false);
                 }
             } catch (IOException e) {
                 status = 0;
@@ -100,17 +104,30 @@ public class DiscordSender {
                 wait = backoff(attempts);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                return new SendResult(masked, 0, attempts, "interrupted", false);
+                return new SendResult(method, masked, 0, attempts, "interrupted", null, false);
             }
             if (attempts > MAX_RETRIES) {
-                return new SendResult(masked, status, attempts, response, false);
+                return new SendResult(method, masked, status, attempts, response, null, false);
             }
             try {
                 sleeper.sleep(wait);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                return new SendResult(masked, status, attempts, response, false);
+                return new SendResult(method, masked, status, attempts, response, null, false);
             }
+        }
+    }
+
+    /** The message object of a 2xx body (Discord sends one for {@code ?wait=true} and PATCH), else null. */
+    private static JsonNode messageObject(String body) {
+        if (body == null || body.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode n = Json.MAPPER.readTree(body);
+            return n != null && n.isObject() ? n : null;
+        } catch (Exception e) {
+            return null;
         }
     }
 
