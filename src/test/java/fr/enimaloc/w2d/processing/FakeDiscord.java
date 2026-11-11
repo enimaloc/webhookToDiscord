@@ -7,13 +7,16 @@ import io.javalin.Javalin;
 
 import java.net.http.HttpClient;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Local stand-in for Discord: records the {@code content} of every message posted to webhook 1, answers
- * {@code ?wait=true} with a message object whose id is the call number, and records PATCHes as {@code id:content}.
+ * {@code ?wait=true} with a message object whose id is the call number, and records PATCHes as {@code id:content}
+ * (ids in {@link #deleted} answer Discord's 404 Unknown Message).
  */
 public final class FakeDiscord implements AutoCloseable {
     public static final String TOKEN = "secretTok";
@@ -21,6 +24,7 @@ public final class FakeDiscord implements AutoCloseable {
 
     public final List<String> contents = new CopyOnWriteArrayList<>();
     public final List<String> patches = new CopyOnWriteArrayList<>();
+    public final Set<String> deleted = ConcurrentHashMap.newKeySet();
     public final CountDownLatch firstRequest = new CountDownLatch(1);
     public final AtomicInteger maxInFlight = new AtomicInteger();
     private final AtomicInteger inFlight = new AtomicInteger();
@@ -29,6 +33,10 @@ public final class FakeDiscord implements AutoCloseable {
     public FakeDiscord(int status, long delayMs) {
         server = Javalin.create(cfg -> {
             cfg.routes.patch("/api/webhooks/1/" + TOKEN + "/messages/{id}", ctx -> {
+                if (deleted.contains(ctx.pathParam("id"))) {
+                    ctx.status(404).result("{\"message\":\"Unknown Message\",\"code\":10008}");
+                    return;
+                }
                 patches.add(ctx.pathParam("id") + ":" + Json.MAPPER.readTree(ctx.body()).path("content").asText());
                 ctx.result("{\"id\":\"" + ctx.pathParam("id") + "\"}");
             });

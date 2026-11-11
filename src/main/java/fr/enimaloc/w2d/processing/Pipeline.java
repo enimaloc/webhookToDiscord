@@ -22,6 +22,8 @@ import java.util.List;
 
 /** Script → Discord → execution record, for one stored request. */
 public final class Pipeline {
+    private static final int UNKNOWN_MESSAGE = 10008;
+
     private final EndpointRepository endpoints;
     private final HistoryRepository history;
     private final ScriptRunner runner;
@@ -59,12 +61,19 @@ public final class Pipeline {
         return new PipelineOutcome(id, status, result, sends);
     }
 
-    /** Applies saveId/forget of each successfully sent message; preview has no sends, so it never writes. */
+    /**
+     * Applies saveId/forget of each successfully sent message, and drops the keys pointing to a message Discord no
+     * longer knows. Preview has no sends, so it never writes.
+     */
     private void updateStore(String endpointId, List<OutgoingMessage> messages, List<SendResult> sends) {
         for (int i = 0; i < sends.size(); i++) {
             OutgoingMessage m = messages.get(i);
             SendResult s = sends.get(i);
             if (!s.ok()) {
+                String deleted = isUnknownMessage(s) ? DiscordUrls.messageId(m.url()) : null;
+                if (deleted != null) {
+                    store.removeValue(endpointId, deleted);
+                }
                 continue;
             }
             if (m.forget() != null) {
@@ -73,6 +82,18 @@ public final class Pipeline {
             if (m.saveId() != null && s.message() != null && s.message().hasNonNull("id")) {
                 store.put(endpointId, m.saveId(), s.message().get("id").asText());
             }
+        }
+    }
+
+    /** Discord's 404 "Unknown Message" (code 10008): the message was deleted. */
+    static boolean isUnknownMessage(SendResult s) {
+        if (s.status() != 404 || s.response() == null || s.response().isBlank()) {
+            return false;
+        }
+        try {
+            return Json.MAPPER.readTree(s.response()).path("code").asInt() == UNKNOWN_MESSAGE;
+        } catch (Exception e) {
+            return false;
         }
     }
 

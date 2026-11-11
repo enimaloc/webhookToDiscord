@@ -190,4 +190,37 @@ class PipelineTest extends PostgresTest {
         assertThat(out.status()).isEqualTo(Execution.Status.SEND_ERROR);
         assertThat(store.all(endpointId)).containsExactly(Map.entry("k", "7"));
     }
+
+    @Test
+    void deletedMessageIsForgottenAndRecreatedNextRun() {
+        Pipeline p = pipeline(204);
+        StoreRepository store = new StoreRepository(db.jdbi());
+        store.put(endpointId, "k", "99");
+        store.put(endpointId, "alias", "99");
+        store.put(endpointId, "other", "5");
+        discord.deleted.add("99");
+
+        PipelineOutcome out = p.execute(request(), EDITING_SCRIPT, Execution.Mode.NORMAL);
+        assertThat(out.status()).isEqualTo(Execution.Status.SEND_ERROR);
+        assertThat(store.all(endpointId)).containsExactly(Map.entry("other", "5"));
+
+        p.execute(request(), EDITING_SCRIPT, Execution.Mode.NORMAL);
+        assertThat(discord.contents).containsExactly("new");
+        assertThat(store.all(endpointId)).containsEntry("k", "1");
+    }
+
+    @Test
+    void otherSendErrorsKeepTheStore() {
+        Pipeline p = pipeline(204);
+        StoreRepository store = new StoreRepository(db.jdbi());
+        store.put(endpointId, "k", "99");
+        String script = """
+                function handle(r) {
+                  return [{ method: "PATCH", url: "https://discord.com/api/webhooks/2/x/messages/99", message: {} }];
+                }
+                """;
+        assertThat(p.execute(request(), script, Execution.Mode.NORMAL).status())
+                .isEqualTo(Execution.Status.SEND_ERROR);
+        assertThat(store.all(endpointId)).containsExactly(Map.entry("k", "99"));
+    }
 }

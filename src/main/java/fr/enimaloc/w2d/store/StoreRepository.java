@@ -43,6 +43,12 @@ public final class StoreRepository {
                 .bind("endpoint", endpointId).bind("key", key).execute()) > 0;
     }
 
+    /** Removes every key of the entry holding {@code value}; returns how many were removed. */
+    public int removeValue(String endpointId, String value) {
+        return jdbi.withHandle(h -> h.createUpdate("DELETE FROM store WHERE endpoint_id = :endpoint AND value = :value")
+                .bind("endpoint", endpointId).bind("value", value).execute());
+    }
+
     public int purgeOlderThan(Instant cutoff) {
         return jdbi.withHandle(h -> h.createUpdate("DELETE FROM store WHERE updated_at < :cutoff")
                 .bind("cutoff", Timestamp.from(cutoff)).execute());
