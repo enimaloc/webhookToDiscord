@@ -54,4 +54,20 @@ class StoreRepositoryTest extends PostgresTest {
         assertThat(all).hasSize(StoreRepository.MAX_KEYS).containsEntry("new", "1")
                 .doesNotContainKey("k" + StoreRepository.MAX_KEYS).containsKey("k1");
     }
+
+    @Test
+    void removeValueDropsEveryMatchingKeyOfTheEntry() {
+        EndpointRepository endpoints = new EndpointRepository(db.jdbi());
+        String a = endpoints.create("a").id();
+        String b = endpoints.create("b").id();
+        StoreRepository store = new StoreRepository(db.jdbi());
+        store.put(a, "x", "1");
+        store.put(a, "y", "1");
+        store.put(a, "z", "2");
+        store.put(b, "x", "1");
+
+        assertThat(store.removeValue(a, "1")).isEqualTo(2);
+        assertThat(store.all(a)).containsExactly(Map.entry("z", "2"));
+        assertThat(store.all(b)).containsExactly(Map.entry("x", "1"));
+    }
 }

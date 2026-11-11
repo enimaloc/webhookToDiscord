@@ -35,4 +35,11 @@ class DiscordUrlsTest {
         assertThat(DiscordUrls.isValid("https://discord.com/api/webhooks/1/tok/messages/abc")).isFalse();
         assertThat(DiscordUrls.mask(url)).isEqualTo("https://discord.com/api/webhooks/1/***/messages/42?thread_id=3");
     }
+
+    @Test
+    void messageIdIsExtracted() {
+        assertThat(DiscordUrls.messageId("https://discord.com/api/webhooks/1/***/messages/42?thread_id=3"))
+                .isEqualTo("42");
+        assertThat(DiscordUrls.messageId("https://discord.com/api/webhooks/1/tok?wait=true")).isNull();
+    }
 }
