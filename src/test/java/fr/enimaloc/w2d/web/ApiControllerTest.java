@@ -39,6 +39,7 @@ class ApiControllerTest extends PostgresTest {
     private HistoryRepository history;
     private ScriptRunner runner;
     private FakeDiscord discord;
+    private final java.util.List<String> triggered = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     @BeforeEach
     void setUp() {
@@ -58,7 +59,8 @@ class ApiControllerTest extends PostgresTest {
         Clock clock = Clock.systemUTC();
         AdminAuth auth = new AdminAuth(PASSWORD, SessionTokens.forAdmin("k".getBytes(StandardCharsets.UTF_8), PASSWORD, clock), clock);
         ApiController api = new ApiController(endpoints, history,
-                new Pipeline(endpoints, history, runner, discord.sender(), new StoreRepository(db.jdbi())), BASE_URL);
+                new Pipeline(endpoints, history, runner, discord.sender(), new StoreRepository(db.jdbi())), triggered::add,
+                BASE_URL);
         return Javalin.create(cfg -> {
             auth.register(cfg.routes);
             api.register(cfg.routes);
@@ -465,5 +467,42 @@ class ApiControllerTest extends PostgresTest {
                 h.execute("DROP FUNCTION test_block_claim()");
             });
         }
+    }
+
+    @Test
+    void resendRequeuesFinishedRequests() {
+        Endpoint e = endpoints.create("e");
+        long done = storedRequest(e.id());
+        long failed = storedRequest(e.id());
+        long pending = storedRequest(e.id());
+        history.setStatus(done, RequestStatus.DONE);
+        history.setStatus(failed, RequestStatus.FAILED);
+        JavalinTest.test(app(), (server, client) -> {
+            String cookie = login(server);
+            String path = "/api/endpoints/" + e.id() + "/resend";
+            var r = send(server, "POST", path, "{\"scope\":\"failed\",\"delayMs\":1500}", cookie);
+            assertThat(r.statusCode()).isEqualTo(202);
+            assertThat(json(r).get("requeued").asInt()).isEqualTo(1);
+            assertThat(history.findRequest(failed).orElseThrow().resendDelayMs()).isEqualTo(1500);
+            assertThat(history.findRequest(done).orElseThrow().status()).isEqualTo(RequestStatus.DONE);
+
+            assertThat(json(send(server, "POST", path, "{\"scope\":\"all\"}", cookie)).get("requeued").asInt())
+                    .isEqualTo(1);
+            assertThat(history.findRequest(done).orElseThrow().status()).isEqualTo(RequestStatus.PENDING);
+            assertThat(history.findRequest(pending).orElseThrow().resendDelayMs()).isZero();
+            assertThat(triggered).containsExactly(e.id(), e.id());
+
+            assertThat(json(send(server, "POST", path, "{\"scope\":\"all\"}", cookie)).get("requeued").asInt())
+                    .isZero();
+            assertThat(triggered).hasSize(2);
+
+            for (String bad : new String[] {"{}", "{\"scope\":\"x\"}", "{\"scope\":\"all\",\"delayMs\":-1}",
+                    "{\"scope\":\"all\",\"delayMs\":60001}", "{\"scope\":\"all\",\"delayMs\":1.5}",
+                    "{\"scope\":\"all\",\"delayMs\":\"1\"}"}) {
+                assertThat(send(server, "POST", path, bad, cookie).statusCode()).as(bad).isEqualTo(400);
+            }
+            assertThat(send(server, "POST", "/api/endpoints/nope/resend", "{\"scope\":\"all\"}", cookie)
+                    .statusCode()).isEqualTo(404);
+        });
     }
 }

@@ -12,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.sql.SQLException;
+import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
@@ -29,6 +30,11 @@ public final class EntryProcessor {
     private final HistoryRepository history;
     private final Pipeline pipeline;
     private final ExecutorService executor;
+    private final Sleeper sleeper;
+
+    public interface Sleeper {
+        void sleep(Duration d) throws InterruptedException;
+    }
 
     /**
      * @param executor runs {@link #trigger triggered} drains. Each running drain holds one pooled connection for its
@@ -37,6 +43,12 @@ public final class EntryProcessor {
      */
     public EntryProcessor(Jdbi jdbi, EndpointRepository endpoints, HistoryRepository history, Pipeline pipeline,
                           ExecutorService executor) {
+        this(jdbi, endpoints, history, pipeline, executor, d -> Thread.sleep(d));
+    }
+
+    EntryProcessor(Jdbi jdbi, EndpointRepository endpoints, HistoryRepository history, Pipeline pipeline,
+                   ExecutorService executor, Sleeper sleeper) {
+        this.sleeper = sleeper;
         this.jdbi = jdbi;
         this.endpoints = endpoints;
         this.history = history;
@@ -71,7 +83,7 @@ public final class EntryProcessor {
         }
     }
 
-    private enum Drain { NOT_LOCKED, DONE, ENTRY_GONE }
+    private enum Drain { NOT_LOCKED, DONE, ENTRY_GONE, INTERRUPTED }
 
     private Drain drainLocked(Handle h, String endpointId) {
         // Session-scoped lock: acquire, claim and release must all happen on this same handle (connection).
@@ -91,6 +103,13 @@ public final class EntryProcessor {
                         return Drain.ENTRY_GONE;
                     }
                     process(req, endpoint.get());
+                    // pacing of a history resend; the remaining requests stay pending if we are interrupted
+                    if (req.resendDelayMs() > 0 && history.hasPending(endpointId)) {
+                        sleeper.sleep(Duration.ofMillis(req.resendDelayMs()));
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return Drain.INTERRUPTED;
                 } catch (RuntimeException e) {
                     LOG.error("Request {} of entry {} left in processing state", req.id(), endpointId, e);
                     throw e;

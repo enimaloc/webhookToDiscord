@@ -23,9 +23,10 @@ import java.util.stream.Collectors;
 
 public final class HistoryRepository {
     private static final String REQ_COLUMNS =
-            "id, endpoint_id, received_at, method, headers::text AS headers, query, body, status";
+            "id, endpoint_id, received_at, method, headers::text AS headers, query, body, status, resend_delay_ms";
     private static final String REQ_COLUMNS_NO_BODY =
-            "id, endpoint_id, received_at, method, headers::text AS headers, query, ''::bytea AS body, status";
+            "id, endpoint_id, received_at, method, headers::text AS headers, query, ''::bytea AS body, status, "
+                    + "resend_delay_ms";
     private static final String EXEC_COLUMNS =
             "id, request_id, started_at, mode, status, logs, messages::text AS messages, "
                     + "send_results::text AS send_results, error";
@@ -68,6 +69,18 @@ public final class HistoryRepository {
         return jdbi.withHandle(h -> h.createUpdate(
                         "UPDATE requests SET status = 'processing' WHERE id = :id AND status = 'pending'")
                 .bind("id", requestId).execute()) == 1;
+    }
+
+    /**
+     * Puts the entry's finished requests (done and failed, or failed only) back to pending so the processor sends
+     * them again in arrival order, pausing {@code delayMs} after each; pending and processing requests are left
+     * alone. Returns how many were requeued.
+     */
+    public int requeue(String endpointId, boolean onlyFailed, int delayMs) {
+        return jdbi.withHandle(h -> h.createUpdate("UPDATE requests SET status = 'pending', resend_delay_ms = :delay "
+                        + "WHERE endpoint_id = :endpoint "
+                        + "AND status IN (" + (onlyFailed ? "'failed'" : "'done','failed'") + ")")
+                .bind("endpoint", endpointId).bind("delay", delayMs).execute());
     }
 
     public boolean hasPending(String endpointId) {
@@ -154,7 +167,8 @@ public final class HistoryRepository {
                     rs.getTimestamp("received_at").toInstant(), rs.getString("method"),
                     Json.MAPPER.readValue(rs.getString("headers"), HEADERS_TYPE), rs.getString("query"),
                     rs.getBytes("body"),
-                    RequestStatus.valueOf(rs.getString("status").toUpperCase(Locale.ROOT)));
+                    RequestStatus.valueOf(rs.getString("status").toUpperCase(Locale.ROOT)),
+                    rs.getInt("resend_delay_ms"));
         } catch (JsonProcessingException ex) {
             throw new SQLException("Invalid headers json", ex);
         }
