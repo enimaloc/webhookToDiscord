@@ -22,6 +22,12 @@ function handle(request) {
 - Mémoire (`request.store`) : objet clé → valeur propre à chaque entrée, conservé entre les exécutions. Un message avec `saveId: "<clé>"` y enregistre l'`id` du message renvoyé par Discord (`PATCH`, ou `POST` avec `?wait=true`, obligatoire dans ce cas) ; `forget: "<clé>"` supprime la clé. Les deux ne s'appliquent qu'après un envoi réussi, jamais en aperçu. Les clés non réécrites depuis `HISTORY_RETENTION_DAYS` jours sont purgées, et au-delà de 1000 clés par entrée les plus anciennes sont évincées. Si Discord répond « Unknown Message » (404, code 10008) à un `PATCH` ou `DELETE`, toutes les clés de l'entrée qui contiennent l'id de ce message sont supprimées : le message a été effacé, l'exécution suivante pourra en recréer un.
 - Limites : 25 messages max par exécution, résultat de 1 Mo max, timeout `SCRIPT_TIMEOUT_MS`, 3 tentatives max par envoi Discord.
 
+## Historique
+
+Chaque requête reçue est conservée avec ses exécutions. Depuis le détail d'une requête, on peut la rejouer en aperçu (rien n'est envoyé) ou réellement.
+
+« Tout renvoyer », sur la page Historique d'une entrée, remet en file toutes ses requêtes traitées, ou seulement les échecs. Elles sont renvoyées avec le script enregistré, dans l'ordre d'arrivée, en marquant une pause du délai choisi (0 à 60 s) après chacune. Les requêtes reçues entre-temps passent après elles. Les requêtes déjà en attente ou en cours ne sont pas touchées. Les envois se font avec la mémoire (`request.store`) actuelle : un message déjà suivi est donc modifié plutôt que recréé.
+
 ## Configuration
 
 | Variable | Défaut | Description |

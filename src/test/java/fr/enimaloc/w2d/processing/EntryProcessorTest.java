@@ -63,13 +63,17 @@ class EntryProcessorTest extends PostgresTest {
     }
 
     private EntryProcessor processor(long discordDelayMs) {
+        return processor(discordDelayMs, d -> Thread.sleep(d));
+    }
+
+    private EntryProcessor processor(long discordDelayMs, EntryProcessor.Sleeper sleeper) {
         if (discord == null) {
             discord = new FakeDiscord(204, discordDelayMs);
         }
         ExecutorService ex = Executors.newSingleThreadExecutor();
         executors.add(ex);
         Pipeline pipeline = new Pipeline(endpoints, history, runner, discord.sender(), new StoreRepository(db.jdbi()));
-        return new EntryProcessor(jdbi(), endpoints, history, pipeline, ex);
+        return new EntryProcessor(jdbi(), endpoints, history, pipeline, ex, sleeper);
     }
 
     private long insert(int n) {
@@ -137,5 +141,41 @@ class EntryProcessorTest extends PostgresTest {
 
         assertThat(discord.contents).containsExactly("0", "1", "2", "3", "4", "5", "6", "7", "8", "9");
         assertThat(discord.maxInFlight.get()).as("never two sends at once").isEqualTo(1);
+    }
+
+    @Test
+    void resendIsPacedAndNewRequestsWaitBehind() {
+        endpoint(null);
+        List<String> events = new java.util.concurrent.CopyOnWriteArrayList<>();
+        EntryProcessor p = processor(0, d -> events.add("sleep " + d.toMillis() + " after " + discord.contents));
+        insert(0);
+        insert(1);
+        p.drain(endpointId);
+        assertThat(history.requeue(endpointId, false, 250)).isEqualTo(2);
+        insert(2);
+
+        p.drain(endpointId);
+
+        assertThat(discord.contents).containsExactly("0", "1", "0", "1", "2");
+        // a pause after each resent request, none after the new one (no pacing, nothing left)
+        assertThat(events).containsExactly("sleep 250 after [0, 1, 0]", "sleep 250 after [0, 1, 0, 1]");
+    }
+
+    @Test
+    void interruptedPauseLeavesTheRestPending() {
+        endpoint(null);
+        EntryProcessor p = processor(0, d -> {
+            throw new InterruptedException();
+        });
+        insert(0);
+        insert(1);
+        p.drain(endpointId);
+        history.requeue(endpointId, false, 1000);
+
+        p.drain(endpointId);
+
+        assertThat(Thread.interrupted()).isTrue();
+        assertThat(discord.contents).containsExactly("0", "1", "0");
+        assertThat(history.hasPending(endpointId)).isTrue();
     }
 }

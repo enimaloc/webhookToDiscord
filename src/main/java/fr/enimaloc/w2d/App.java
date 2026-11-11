@@ -49,7 +49,8 @@ public final class App {
                 config.maxBodyBytes());
         Clock clock = Clock.systemUTC();
         AdminAuth auth = new AdminAuth(config.adminPassword(), SessionTokens.forAdmin(config.sessionSecret(), config.adminPassword(), clock), clock);
-        ApiController api = new ApiController(endpoints, history, pipeline, config.publicBaseUrl());
+        ApiController api = new ApiController(endpoints, history, pipeline, processor::trigger,
+                config.publicBaseUrl());
         return Javalin.create(cfg -> {
             cfg.http.maxRequestSize = config.maxBodyBytes();
             cfg.routes.get("/health", ctx -> ctx.result("ok"));

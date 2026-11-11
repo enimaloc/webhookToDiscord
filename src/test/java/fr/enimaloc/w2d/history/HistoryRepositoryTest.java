@@ -100,4 +100,23 @@ class HistoryRepositoryTest extends PostgresTest {
         assertThat(repo.claimPending(id)).isFalse();
         assertThat(repo.findRequest(id).orElseThrow().status()).isEqualTo(RequestStatus.FAILED);
     }
+
+    @Test
+    void requeueLeavesUnfinishedRequestsAlone() {
+        long done = insert();
+        long failed = insert();
+        long processing = insert();
+        long pending = insert();
+        repo.setStatus(done, RequestStatus.DONE);
+        repo.setStatus(failed, RequestStatus.FAILED);
+        repo.setStatus(processing, RequestStatus.PROCESSING);
+
+        assertThat(repo.requeue(endpointId, true, 100)).isEqualTo(1);
+        assertThat(repo.findRequest(done).orElseThrow().status()).isEqualTo(RequestStatus.DONE);
+        // the failed one is already pending again: only the done one is left to requeue
+        assertThat(repo.requeue(endpointId, false, 200)).isEqualTo(1);
+        assertThat(repo.findRequest(done).orElseThrow().resendDelayMs()).isEqualTo(200);
+        assertThat(repo.findRequest(processing).orElseThrow().status()).isEqualTo(RequestStatus.PROCESSING);
+        assertThat(repo.findRequest(pending).orElseThrow().resendDelayMs()).isZero();
+    }
 }

@@ -23,12 +23,14 @@ import io.javalin.http.HttpStatus;
 import java.time.Instant;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.Consumer;
 
 /** JSON API of the admin panel. Must be registered after {@link AdminAuth}, which guards {@code /api/*}. */
 public final class ApiController {
     static final int MAX_PAGE_SIZE = 200;
     static final int DEFAULT_PAGE_SIZE = 50;
     static final int MAX_NAME_LENGTH = 200;
+    static final int MAX_RESEND_DELAY_MS = 60_000;
     /** Lower-cased alias → Jackson type id of {@link AuthConfig}. */
     private static final Map<String, String> AUTH_TYPES = Map.of(
             "none", "none", "secretheader", "secretHeader", "bearer", "bearer", "basic", "basic", "hmac", "hmac");
@@ -36,13 +38,16 @@ public final class ApiController {
     private final EndpointRepository endpoints;
     private final HistoryRepository history;
     private final Pipeline pipeline;
+    private final Consumer<String> trigger;
     private final String publicBaseUrl;
 
+    /** {@code trigger} schedules the processing of an entry's pending requests (see {@code EntryProcessor}). */
     public ApiController(EndpointRepository endpoints, HistoryRepository history, Pipeline pipeline,
-                         String publicBaseUrl) {
+                         Consumer<String> trigger, String publicBaseUrl) {
         this.endpoints = endpoints;
         this.history = history;
         this.pipeline = pipeline;
+        this.trigger = trigger;
         this.publicBaseUrl = publicBaseUrl.endsWith("/")
                 ? publicBaseUrl.substring(0, publicBaseUrl.length() - 1) : publicBaseUrl;
     }
@@ -66,6 +71,7 @@ public final class ApiController {
         routes.put("/api/endpoints/{id}", this::updateEndpoint);
         routes.delete("/api/endpoints/{id}", this::deleteEndpoint);
         routes.get("/api/endpoints/{id}/requests", this::listRequests);
+        routes.post("/api/endpoints/{id}/resend", this::resend);
         routes.get("/api/requests/{rid}", this::requestDetail);
         routes.post("/api/requests/{rid}/replay", this::replay);
     }
@@ -145,6 +151,29 @@ public final class ApiController {
                     .put("status", lower(r.status()));
         }
         json(ctx, HttpStatus.OK, out);
+    }
+
+    private void resend(Context ctx) {
+        Endpoint e = endpoint(ctx);
+        JsonNode body = body(ctx);
+        JsonNode scopeNode = body.get("scope");
+        String scope = scopeNode != null && scopeNode.isTextual() ? scopeNode.asText() : "";
+        boolean onlyFailed = switch (scope) {
+            case "all" -> false;
+            case "failed" -> true;
+            default -> throw badRequest("scope must be \"all\" or \"failed\"");
+        };
+        JsonNode delayNode = body.get("delayMs");
+        if (delayNode != null && !delayNode.isNull() && !(delayNode.canConvertToInt() && delayNode.isIntegralNumber()
+                && delayNode.asInt() >= 0 && delayNode.asInt() <= MAX_RESEND_DELAY_MS)) {
+            throw badRequest("delayMs must be an integer between 0 and " + MAX_RESEND_DELAY_MS);
+        }
+        int delayMs = delayNode == null || delayNode.isNull() ? 0 : delayNode.asInt();
+        int requeued = history.requeue(e.id(), onlyFailed, delayMs);
+        if (requeued > 0) {
+            trigger.accept(e.id());
+        }
+        json(ctx, HttpStatus.ACCEPTED, Json.MAPPER.createObjectNode().put("requeued", requeued));
     }
 
     private void requestDetail(Context ctx) {

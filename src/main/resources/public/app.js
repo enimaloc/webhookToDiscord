@@ -505,6 +505,7 @@ async function renderHistory(id, endpointId, page) {
     el('p', {}, el('a', { href: '#/' }, '< Entrées'), ' · ',
       el('a', { href: '#/endpoints/' + encodeURIComponent(endpointId) }, 'Modifier')),
     el('h1', {}, 'Historique : ' + ep.name),
+    resendCard(base),
     el('div', { class: 'card', style: 'overflow-x:auto' },
       rows.length === 0 ? el('p', { class: 'muted' }, 'Aucune requête sur cette page.') :
         el('table', {},
@@ -514,6 +515,54 @@ async function renderHistory(id, endpointId, page) {
             el('td', {}, badge(r.status)),
             el('td', {}, el('a', { href: '#/requests/' + r.id }, 'Détail')))))),
       el('div', { class: 'row between', style: 'margin-top:12px' }, prev, el('span', { class: 'muted' }, 'Page ' + (page + 1)), next)));
+}
+
+/** Requeues the entry's finished requests; the processor resends them in order, `delay` apart. */
+function resendCard(base) {
+  const scope = el('select', {},
+    el('option', { value: 'all' }, 'Toutes les requêtes traitées'),
+    el('option', { value: 'failed' }, 'Les échecs uniquement'));
+  const delay = el('input', { type: 'number', min: 0, max: 60, step: 0.5, value: 1, style: 'width:6em' });
+  const resendBtn = el('button', { type: 'button', class: 'secondary' }, 'Tout renvoyer');
+  const yesBtn = el('button', { type: 'button', class: 'danger' }, 'Oui, renvoyer');
+  const out = el('div', {});
+  const confirmBox = el('span', { hidden: true, class: 'row' },
+    el('span', { class: 'error' }, 'Renvoyer réellement ces messages sur Discord, avec le script enregistré ?'),
+    yesBtn,
+    el('button', { type: 'button', class: 'secondary', onclick: () => { confirmBox.hidden = true; resendBtn.hidden = false; } }, 'Annuler'));
+
+  resendBtn.addEventListener('click', () => {
+    const seconds = Number(delay.value);
+    if (!(seconds >= 0 && seconds <= 60)) {
+      out.replaceChildren(el('div', { class: 'error' }, 'Le délai doit être compris entre 0 et 60 secondes.'));
+      return;
+    }
+    out.replaceChildren();
+    resendBtn.hidden = true;
+    confirmBox.hidden = false;
+  });
+  yesBtn.addEventListener('click', async () => {
+    yesBtn.disabled = true;
+    try {
+      const res = await api('POST', base + '/resend',
+        { scope: scope.value, delayMs: Math.round(Number(delay.value) * 1000) });
+      out.replaceChildren(el('p', {},
+        res.requeued === 0 ? 'Aucune requête à renvoyer.'
+          : res.requeued + ' requête(s) remise(s) en file, envoyées dans l\'ordre. Les nouvelles requêtes passeront après. ',
+        el('a', { href: '#', onclick: (ev) => { ev.preventDefault(); route(); } }, 'Rafraîchir')));
+    } catch (e) {
+      out.replaceChildren(el('div', { class: 'error' }, errText(e)));
+    } finally {
+      yesBtn.disabled = false;
+      confirmBox.hidden = true;
+      resendBtn.hidden = false;
+    }
+  });
+
+  return el('div', { class: 'card' },
+    el('h2', {}, 'Tout renvoyer'),
+    el('div', { class: 'row' }, scope, el('label', {}, 'Délai entre chaque envoi (s) '), delay, resendBtn, confirmBox),
+    out);
 }
 
 /* ---------- request detail ---------- */
