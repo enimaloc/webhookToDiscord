@@ -204,4 +204,29 @@ class ScriptRunnerTest {
         assertThat(r.ok()).isFalse();
         assertThat(r.error()).contains(error);
     }
+
+    @Test
+    void storeIsExposedAndStoreFieldsParsed() {
+        var in = new IncomingRequest(1, "ep", Instant.now(), "POST", Map.of(), null,
+                "{}".getBytes(StandardCharsets.UTF_8), IncomingRequest.RequestStatus.PENDING);
+        var r = runner.run("function handle(q){ return [{method:'PATCH', url:'" + URL + "/messages/' + q.store.k,"
+                + " message:{content:'x'}, saveId:'k', forget:'old'}]; }", ScriptRequest.from(in, Map.of("k", "42")));
+        assertThat(r.ok()).as(r.error()).isTrue();
+        var m = r.messages().get(0);
+        assertThat(m.url()).endsWith("/messages/42");
+        assertThat(m.saveId()).isEqualTo("k");
+        assertThat(m.forget()).isEqualTo("old");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "[{url:'" + URL + "', message:{}, saveId:'k'}]",
+            "[{method:'DELETE', url:'" + URL + "/messages/1', saveId:'k'}]",
+            "[{url:'" + URL + "?wait=true', message:{}, saveId:''}]",
+            "[{url:'" + URL + "', message:{}, forget:3}]"})
+    void invalidStoreFieldsRejected(String result) {
+        var r = runner.run("function handle(){ return " + result + "; }", req("{}"));
+        assertThat(r.ok()).isFalse();
+        assertThat(r.error()).containsAnyOf("saveId", "forget");
+    }
 }

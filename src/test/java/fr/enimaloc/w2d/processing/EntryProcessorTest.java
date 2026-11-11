@@ -5,6 +5,7 @@ import fr.enimaloc.w2d.endpoint.EndpointRepository;
 import fr.enimaloc.w2d.history.HistoryRepository;
 import fr.enimaloc.w2d.history.IncomingRequest.RequestStatus;
 import fr.enimaloc.w2d.script.ScriptRunner;
+import fr.enimaloc.w2d.store.StoreRepository;
 import fr.enimaloc.w2d.support.PostgresTest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -67,7 +68,7 @@ class EntryProcessorTest extends PostgresTest {
         }
         ExecutorService ex = Executors.newSingleThreadExecutor();
         executors.add(ex);
-        Pipeline pipeline = new Pipeline(endpoints, history, runner, discord.sender());
+        Pipeline pipeline = new Pipeline(endpoints, history, runner, discord.sender(), new StoreRepository(db.jdbi()));
         return new EntryProcessor(jdbi(), endpoints, history, pipeline, ex);
     }
 

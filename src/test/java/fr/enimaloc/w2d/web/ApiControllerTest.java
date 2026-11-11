@@ -11,6 +11,7 @@ import fr.enimaloc.w2d.json.Json;
 import fr.enimaloc.w2d.processing.FakeDiscord;
 import fr.enimaloc.w2d.processing.Pipeline;
 import fr.enimaloc.w2d.script.ScriptRunner;
+import fr.enimaloc.w2d.store.StoreRepository;
 import fr.enimaloc.w2d.support.PostgresTest;
 import io.javalin.Javalin;
 import io.javalin.testtools.JavalinTest;
@@ -57,7 +58,7 @@ class ApiControllerTest extends PostgresTest {
         Clock clock = Clock.systemUTC();
         AdminAuth auth = new AdminAuth(PASSWORD, SessionTokens.forAdmin("k".getBytes(StandardCharsets.UTF_8), PASSWORD, clock), clock);
         ApiController api = new ApiController(endpoints, history,
-                new Pipeline(endpoints, history, runner, discord.sender()), BASE_URL);
+                new Pipeline(endpoints, history, runner, discord.sender(), new StoreRepository(db.jdbi())), BASE_URL);
         return Javalin.create(cfg -> {
             auth.register(cfg.routes);
             api.register(cfg.routes);

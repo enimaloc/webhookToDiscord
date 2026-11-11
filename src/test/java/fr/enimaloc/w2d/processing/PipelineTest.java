@@ -6,6 +6,7 @@ import fr.enimaloc.w2d.history.Execution;
 import fr.enimaloc.w2d.history.HistoryRepository;
 import fr.enimaloc.w2d.history.IncomingRequest;
 import fr.enimaloc.w2d.script.ScriptRunner;
+import fr.enimaloc.w2d.store.StoreRepository;
 import fr.enimaloc.w2d.support.PostgresTest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -50,7 +51,7 @@ class PipelineTest extends PostgresTest {
 
     private Pipeline pipeline(int status) {
         discord = new FakeDiscord(status, 0);
-        return new Pipeline(endpoints, history, runner, discord.sender());
+        return new Pipeline(endpoints, history, runner, discord.sender(), new StoreRepository(db.jdbi()));
     }
 
     private IncomingRequest request() {
@@ -145,5 +146,48 @@ class PipelineTest extends PostgresTest {
         JsonNode message = exec.messages().get(0).get("message");
         assertThat(message.get("content").asText()).isEqualTo("a\uFFFDb");
         assertThat(message.get("embeds").get(0).get("a\uFFFDb").asText()).isEqualTo("a\uFFFDb");
+    }
+
+    private static final String EDITING_SCRIPT = """
+            function handle(r) {
+              const id = r.store.k;
+              if (r.json.done) return [{ method: "DELETE", url: "%1$s/messages/" + id, forget: "k" }];
+              return id
+                ? [{ method: "PATCH", url: "%1$s/messages/" + id, message: { content: "edit" } }]
+                : [{ url: "%1$s?wait=true", message: { content: "new" }, saveId: "k" }];
+            }
+            """.formatted(FakeDiscord.URL);
+
+    @Test
+    void savedIdIsReusedByTheNextRun() {
+        Pipeline p = pipeline(204);
+        StoreRepository store = new StoreRepository(db.jdbi());
+
+        p.execute(request(), EDITING_SCRIPT, Execution.Mode.PREVIEW);
+        assertThat(store.all(endpointId)).isEmpty();
+
+        PipelineOutcome first = p.execute(request(), EDITING_SCRIPT, Execution.Mode.NORMAL);
+        assertThat(first.status()).isEqualTo(Execution.Status.SUCCESS);
+        assertThat(discord.contents).containsExactly("new");
+        assertThat(store.all(endpointId)).containsExactly(Map.entry("k", "1"));
+
+        PipelineOutcome second = p.execute(request(), EDITING_SCRIPT, Execution.Mode.NORMAL);
+        assertThat(second.status()).isEqualTo(Execution.Status.SUCCESS);
+        assertThat(discord.patches).containsExactly("1:edit");
+        assertThat(discord.contents).containsExactly("new");
+        assertThat(second.sends().get(0).message().get("id").asText()).isEqualTo("1");
+    }
+
+    @Test
+    void failedSendKeepsTheStoreUntouched() {
+        Pipeline p = pipeline(500);
+        StoreRepository store = new StoreRepository(db.jdbi());
+        store.put(endpointId, "k", "7");
+        long rid = history.insertPending(endpointId, "POST", Map.of(), "",
+                "{\"done\":true}".getBytes(StandardCharsets.UTF_8), Set.of());
+        // DELETE route is not served by FakeDiscord, so the send fails
+        PipelineOutcome out = p.execute(history.findRequest(rid).orElseThrow(), EDITING_SCRIPT, Execution.Mode.NORMAL);
+        assertThat(out.status()).isEqualTo(Execution.Status.SEND_ERROR);
+        assertThat(store.all(endpointId)).containsExactly(Map.entry("k", "7"));
     }
 }

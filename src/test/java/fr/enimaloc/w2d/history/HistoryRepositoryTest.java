@@ -85,7 +85,7 @@ class HistoryRepositoryTest extends PostgresTest {
         long recent = insert();
         jdbi().useHandle(h -> h.createUpdate(
                 "UPDATE requests SET received_at = now() - interval '31 days' WHERE id = :id").bind("id", old).execute());
-        assertThat(new RetentionJob(repo, 30).runOnce(Instant.now())).isEqualTo(1);
+        assertThat(new RetentionJob(repo, null, 30).runOnce(Instant.now())).isEqualTo(1);
         assertThat(repo.findRequest(old)).isEqualTo(Optional.empty());
         assertThat(repo.findRequest(recent)).isPresent();
     }

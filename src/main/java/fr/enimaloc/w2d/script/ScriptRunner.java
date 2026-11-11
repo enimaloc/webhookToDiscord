@@ -34,6 +34,7 @@ public final class ScriptRunner implements AutoCloseable {
     public static final int MAX_MESSAGES = 25;
     public static final int MAX_RESULT_BYTES = 1024 * 1024;
     public static final int MAX_LOG_BYTES = 64 * 1024;
+    public static final int MAX_STORE_KEY = 200;
 
     private static final String HARNESS = """
             (function (req) {
@@ -185,15 +186,40 @@ public final class ScriptRunner implements AutoCloseable {
                 return ScriptResult.failure(logs, "messages[" + i + "].url must " + (targetsMessage ? "not " : "")
                         + "end with /messages/<id> for " + method);
             }
+            String saveId;
+            String forget;
+            try {
+                saveId = storeKey(item, "saveId", i);
+                forget = storeKey(item, "forget", i);
+            } catch (IllegalArgumentException e) {
+                return ScriptResult.failure(logs, e.getMessage());
+            }
+            if (saveId != null && (method.equals("DELETE")
+                    || method.equals("POST") && !url.asText().matches(".*[?&]wait=true(?:&.*)?$"))) {
+                return ScriptResult.failure(logs, "messages[" + i + "].saveId needs PATCH or POST with ?wait=true");
+            }
             JsonNode message = item.get("message");
             if (method.equals("DELETE")) {
                 message = null;
             } else if (message == null || !message.isObject()) {
                 return ScriptResult.failure(logs, "messages[" + i + "].message must be an object");
             }
-            messages.add(new OutgoingMessage(method, url.asText(), message));
+            messages.add(new OutgoingMessage(method, url.asText(), message, saveId, forget));
         }
         return ScriptResult.success(messages, logs);
+    }
+
+    /** Optional non-empty string field naming a store key; throws with a user-facing message otherwise. */
+    private static String storeKey(JsonNode item, String field, int index) {
+        JsonNode node = item.get(field);
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        if (!node.isTextual() || node.asText().isEmpty() || node.asText().length() > MAX_STORE_KEY) {
+            throw new IllegalArgumentException("messages[" + index + "]." + field + " must be a string of 1 to "
+                    + MAX_STORE_KEY + " characters");
+        }
+        return node.asText();
     }
 
     @Override

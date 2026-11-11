@@ -15,6 +15,7 @@ import fr.enimaloc.w2d.script.OutgoingMessage;
 import fr.enimaloc.w2d.script.ScriptRequest;
 import fr.enimaloc.w2d.script.ScriptResult;
 import fr.enimaloc.w2d.script.ScriptRunner;
+import fr.enimaloc.w2d.store.StoreRepository;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -25,17 +26,19 @@ public final class Pipeline {
     private final HistoryRepository history;
     private final ScriptRunner runner;
     private final DiscordSender sender;
+    private final StoreRepository store;
 
     public Pipeline(EndpointRepository endpoints, HistoryRepository history, ScriptRunner runner,
-                    DiscordSender sender) {
+                    DiscordSender sender, StoreRepository store) {
         this.endpoints = endpoints;
         this.history = history;
         this.runner = runner;
         this.sender = sender;
+        this.store = store;
     }
 
     public PipelineOutcome execute(IncomingRequest req, String script, Execution.Mode mode) {
-        ScriptResult raw = runner.run(script, ScriptRequest.from(req));
+        ScriptResult raw = runner.run(script, ScriptRequest.from(req, store.all(req.endpointId())));
         // what is stored and returned is NUL-free (PostgreSQL text/jsonb reject U+0000); Discord gets the original
         ScriptResult result = sanitize(raw);
         if (!result.ok()) {
@@ -46,6 +49,7 @@ public final class Pipeline {
 
         List<SendResult> sends = mode == Execution.Mode.PREVIEW ? List.of()
                 : sanitizeSends(sender.sendAll(raw.messages()));
+        updateStore(req.endpointId(), result.messages(), sends);
         long failed = sends.stream().filter(s -> !s.ok()).count();
         Execution.Status status = failed > 0 ? Execution.Status.SEND_ERROR : Execution.Status.SUCCESS;
         String error = failed > 0 ? failed + " of " + sends.size() + " message(s) failed to send" : null;
@@ -55,10 +59,28 @@ public final class Pipeline {
         return new PipelineOutcome(id, status, result, sends);
     }
 
+    /** Applies saveId/forget of each successfully sent message; preview has no sends, so it never writes. */
+    private void updateStore(String endpointId, List<OutgoingMessage> messages, List<SendResult> sends) {
+        for (int i = 0; i < sends.size(); i++) {
+            OutgoingMessage m = messages.get(i);
+            SendResult s = sends.get(i);
+            if (!s.ok()) {
+                continue;
+            }
+            if (m.forget() != null) {
+                store.remove(endpointId, m.forget());
+            }
+            if (m.saveId() != null && s.message() != null && s.message().hasNonNull("id")) {
+                store.put(endpointId, m.saveId(), s.message().get("id").asText());
+            }
+        }
+    }
+
     static ScriptResult sanitize(ScriptResult r) {
         List<OutgoingMessage> messages = new ArrayList<>(r.messages().size());
         for (OutgoingMessage m : r.messages()) {
-            messages.add(new OutgoingMessage(m.method(), stripNul(m.url()), stripNul(m.message())));
+            messages.add(new OutgoingMessage(m.method(), stripNul(m.url()), stripNul(m.message()),
+                    stripNul(m.saveId()), stripNul(m.forget())));
         }
         return new ScriptResult(r.ok(), messages, stripNul(r.logs()), stripNul(r.error()));
     }
@@ -97,7 +119,20 @@ public final class Pipeline {
     private static JsonNode maskedMessages(List<OutgoingMessage> messages) {
         ArrayNode out = Json.MAPPER.createArrayNode();
         for (OutgoingMessage m : messages) {
-            out.addObject().put("method", m.method()).put("url", DiscordUrls.mask(m.url())).set("message", m.message());
+            out.add(describe(m));
+        }
+        return out;
+    }
+
+    /** History/API view of a message: URL masked, store fields only when set. */
+    public static ObjectNode describe(OutgoingMessage m) {
+        ObjectNode out = Json.MAPPER.createObjectNode().put("method", m.method()).put("url", DiscordUrls.mask(m.url()));
+        out.set("message", m.message());
+        if (m.saveId() != null) {
+            out.put("saveId", m.saveId());
+        }
+        if (m.forget() != null) {
+            out.put("forget", m.forget());
         }
         return out;
     }
