@@ -441,7 +441,7 @@ async function buildTestPanel(panel, endpointId, getScript) {
     el('div', { class: 'row', style: 'margin-top:10px' }, previewBtn, sendBtn, confirmBox, pendingNote), out);
 }
 
-/** Renders a replay response ({status, error, logs, messages:[{url,message}], sends}). */
+/** Renders a replay response ({status, error, logs, messages:[{method,url,message}], sends}). */
 function renderResult(res) {
   return el('div', {},
     el('p', {}, 'Statut : ', badge(res.status)),
@@ -463,21 +463,25 @@ function renderMessages(messages) {
   const list = Array.isArray(messages) ? messages : [messages];
   return el('div', {}, el('strong', {}, 'Messages (' + list.length + ')'),
     list.map((m) => el('div', {},
-      m && m.url ? el('div', { class: 'small muted' }, m.url) : null,
-      el('pre', {}, JSON.stringify(m && m.message !== undefined ? m.message : m, null, 2)))));
+      m && m.url ? el('div', { class: 'small muted' }, (m.method || 'POST') + ' ' + m.url) : null,
+      m && m.message === null ? null
+        : el('pre', {}, JSON.stringify(m && m.message !== undefined ? m.message : m, null, 2)))));
 }
 
 function renderSends(sends) {
   if (!sends || sends.length === 0) return null;
   return el('div', {}, el('strong', {}, 'Envois'),
     el('table', {},
-      el('thead', {}, el('tr', {}, ['URL', 'Statut HTTP', 'Tentatives', 'Résultat', 'Réponse'].map((h) => el('th', {}, h)))),
+      el('thead', {}, el('tr', {}, ['Méthode', 'URL', 'Statut HTTP', 'Tentatives', 'Résultat', 'Réponse'].map((h) => el('th', {}, h)))),
       el('tbody', {}, sends.map((s) => el('tr', {},
+        el('td', {}, s.method || 'POST'),
         el('td', {}, el('code', {}, s.url)),
         el('td', {}, s.status),
         el('td', {}, s.attempts),
         el('td', {}, el('span', { class: s.ok ? 'on' : 'error' }, s.ok ? 'OK' : 'Échec')),
-        el('td', {}, s.response ? el('code', {}, String(s.response).slice(0, 300)) : '-'))))));
+        el('td', {}, s.message
+          ? el('details', {}, el('summary', {}, 'Message ' + (s.message.id || '')), el('pre', {}, JSON.stringify(s.message, null, 2)))
+          : s.response ? el('code', {}, String(s.response).slice(0, 300)) : '-'))))));
 }
 
 /* ---------- history ---------- */

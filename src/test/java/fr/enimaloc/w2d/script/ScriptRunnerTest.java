@@ -173,4 +173,35 @@ class ScriptRunnerTest {
         assertThat(r.ok()).isTrue();
         assertThat(r.logs().length()).isLessThanOrEqualTo(64 * 1024 + 64);
     }
+
+    @Test
+    void methodDefaultsToPost() {
+        var r = runner.run("function handle(){ return [{url:'" + URL + "', message:{content:'a'}}]; }", req("{}"));
+        assertThat(r.ok()).isTrue();
+        assertThat(r.messages().get(0).method()).isEqualTo("POST");
+    }
+
+    @Test
+    void patchAndDeleteTargetAMessage() {
+        var r = runner.run("function handle(){ return [{method:'patch', url:'" + URL + "/messages/42', message:{content:'b'}},"
+                + " {method:'DELETE', url:'" + URL + "/messages/42', message:{content:'ignored'}}]; }", req("{}"));
+        assertThat(r.ok()).as(r.error()).isTrue();
+        assertThat(r.messages().get(0).method()).isEqualTo("PATCH");
+        assertThat(r.messages().get(0).message().path("content").asText()).isEqualTo("b");
+        assertThat(r.messages().get(1).method()).isEqualTo("DELETE");
+        assertThat(r.messages().get(1).message()).isNull();
+    }
+
+    @ParameterizedTest
+    @CsvSource(delimiter = '|', value = {
+            "PATCH|''|end with /messages/<id> for PATCH",
+            "DELETE|''|end with /messages/<id> for DELETE",
+            "POST|/messages/42|not end with /messages/<id> for POST",
+            "PUT|/messages/42|must be POST, PATCH or DELETE"})
+    void invalidMethodsRejected(String method, String suffix, String error) {
+        var r = runner.run("function handle(){ return [{method:'" + method + "', url:'" + URL + suffix
+                + "', message:{content:'x'}}]; }", req("{}"));
+        assertThat(r.ok()).isFalse();
+        assertThat(r.error()).contains(error);
+    }
 }
